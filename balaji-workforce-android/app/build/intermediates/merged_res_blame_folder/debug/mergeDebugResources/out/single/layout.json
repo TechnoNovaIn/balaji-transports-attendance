@@ -1,0 +1,14 @@
+[
+    {
+        "merged": "com.balaji.workforce.app-mergeDebugResources-35:/layout/activity_main.xml",
+        "source": "com.balaji.workforce.app-main-38:/layout/activity_main.xml"
+    },
+    {
+        "merged": "C:\\Users\\darsh\\.gradle\\daemon\\8.9\\com.balaji.workforce.app-mergeDebugResources-35:\\layout\\activity_main.xml",
+        "source": "C:\\Users\\darsh\\.gradle\\daemon\\8.9\\com.balaji.workforce.app-main-38:\\layout\\activity_main.xml"
+    },
+    {
+        "merged": "C:\\Users\\darsh\\.gradle\\daemon\\8.9\\com.balaji.workforce.app-mergeDebugResources-35:\\layout\\dialog_server_url.xml",
+        "source": "C:\\Users\\darsh\\.gradle\\daemon\\8.9\\com.balaji.workforce.app-main-38:\\layout\\dialog_server_url.xml"
+    }
+]

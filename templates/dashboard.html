@@ -1,0 +1,143 @@
+{% extends 'base.html' %}
+{% block title %}Overview{% endblock %}
+{% block breadcrumb %}Overview{% endblock %}
+{% block content %}
+{% if is_employee %}
+<div class="page-heading heading-with-action">
+  <div>
+    <div class="eyebrow"><span></span> EMPLOYEE ATTENDANCE</div>
+    <h1>Welcome, {{ current_user.full_name }}<span class="heading-period">.</span></h1>
+    <p>Mark your check-in and check-out and view your daily shift attendance records.</p>
+  </div>
+  <div class="shift-timing-badge"><i class="bi bi-clock-history"></i> Shift timing: <strong>{{ shift_timing }}</strong></div>
+</div>
+
+{% if geofence_configured %}
+<div class="notice-banner"><i class="bi bi-geo-alt-fill"></i><div><strong>Workplace location tracking active</strong><span>Attendance check-in and check-out are accepted within {{ geofence_radius_meters }} metres of the approved workplace.</span></div></div>
+{% else %}
+<div class="notice-banner"><i class="bi bi-exclamation-triangle"></i><div><strong>Factory geofence is not configured</strong><span>Attendance requests are blocked until factory coordinates are configured.</span></div></div>
+{% endif %}
+
+<div class="attendance-layout attendance-layout-single">
+  <section class="panel attendance-action-panel">
+    <div class="panel-header">
+      <div><h2>Today's shift</h2><p>One check-in, 1-hour break buffer, and one check-out</p></div>
+      <span class="live-pill"><span></span> TODAY</span>
+    </div>
+    {% if record %}
+    <div class="shift-state">
+      <div class="shift-state-icon {% if record.checkout_at %}state-complete{% elif record.break_in_progress %}state-break{% else %}state-active{% endif %}">
+        <i class="bi {% if record.checkout_at %}bi-check2-circle{% elif record.break_in_progress %}bi-cup-hot{% else %}bi-clock-history{% endif %}"></i>
+      </div>
+      <div>
+        <strong>{% if record.checkout_at %}Shift completed{% elif record.break_in_progress %}On 1-hour break{% else %}You're checked in{% endif %}</strong>
+        <p>{% if record.checkout_at %}Your attendance for today is complete.{% elif record.break_in_progress %}Your 1-hour break buffer is currently active. Click resume when you return to your shift.{% else %}Your check-in is saved. You can take your 1-hour break buffer and check out when finished.{% endif %}</p>
+      </div>
+      <span class="badge badge-{{ record.status|lower }}"><span></span>{{ record.status }}</span>
+    </div>
+    <div class="shift-times">
+      <div><span class="time-label"><i class="bi bi-box-arrow-in-right"></i> Check-in</span><strong>{{ record.checkin_at.strftime('%I:%M %p') }}</strong><small>GPS {{ 'captured' if record.gps_complete else 'unavailable' }}</small></div>
+      <div class="time-divider"></div>
+      <div><span class="time-label"><i class="bi bi-cup-hot"></i> 1-hr Break</span><strong>{{ record.break_display }}</strong><small>{% if record.break_in_progress %}In progress{% elif record.break_start_at %}Completed{% else %}1h available{% endif %}</small></div>
+      <div class="time-divider"></div>
+      <div><span class="time-label"><i class="bi bi-box-arrow-left"></i> Check-out</span><strong>{{ record.checkout_at.strftime('%I:%M %p') if record.checkout_at else '— —' }}</strong><small>{% if record.checkout_at %}GPS captured{% else %}Not recorded yet{% endif %}</small></div>
+    </div>
+    {% if record.is_grace_period %}
+    <div class="notice-banner" style="margin-top:14px;background:#eef6fc;border-color:#d0e6f7"><i class="bi bi-shield-check" style="color:#2085d8"></i><div><strong style="color:#1d6fa5">15-minute arrival exception applied</strong><span>You arrived within the 15-minute buffer after shift start. Your attendance status is protected as Present.</span></div></div>
+    {% elif record.exception_granted %}
+    <div class="notice-banner" style="margin-top:14px;background:#eef6fc;border-color:#d0e6f7"><i class="bi bi-shield-check" style="color:#2085d8"></i><div><strong style="color:#1d6fa5">Manager exception approved</strong><span>A 15-minute late exception was approved for this shift.</span></div></div>
+    {% endif %}
+    {% else %}
+    <div class="attendance-empty">
+      <div class="attendance-illustration">
+        <span class="illustration-ring ring-one"></span>
+        <span class="illustration-ring ring-two"></span>
+        <span class="illustration-pin"><i class="bi bi-geo-alt-fill"></i></span>
+      </div>
+      <h3>Start your shift</h3>
+      <p>Allow browser location access to securely record the time and coordinates of your attendance.</p>
+    </div>
+    {% endif %}
+    <div class="gps-notice"><i class="bi bi-shield-check"></i><div><strong>Location consent & buffer</strong><span>15-minute late exception is provided automatically. 1-hour break buffer is available during your shift.</span></div></div>
+    <div id="attendanceMessage" class="attendance-message" role="status" aria-live="polite" hidden></div>
+    <div class="attendance-actions">
+      {% if not record %}
+      <button id="checkInButton" class="btn btn-primary btn-large" data-action="check-in"><i class="bi bi-geo-alt"></i> Check in with GPS</button>
+      {% elif not record.checkout_at %}
+        {% if record.break_in_progress %}
+        <button id="breakEndButton" class="btn btn-primary btn-large" type="button"><i class="bi bi-play-circle"></i> End break / Resume work</button>
+        {% else %}
+        <button id="checkOutButton" class="btn btn-primary btn-large" data-action="check-out"><i class="bi bi-box-arrow-right"></i> Check out with GPS</button>
+        <button id="breakStartButton" class="btn btn-outline btn-large" type="button"><i class="bi bi-cup-hot"></i> {% if record.break_start_at %}Take additional break{% else %}Start 1-hour break{% endif %}</button>
+        {% endif %}
+      {% else %}
+      <button class="btn btn-outline btn-large" disabled><i class="bi bi-check-circle"></i> Attendance completed</button>
+      {% endif %}
+      <span class="privacy-note"><i class="bi bi-lock"></i> Location is attached to this attendance record.</span>
+    </div>
+  </section>
+</div>
+
+<section class="panel records-panel personal-history">
+  <div class="panel-header"><div><h2>Attendance history</h2><p>Your recorded shifts, break buffers, and timestamps</p></div></div>
+  {% if history %}
+  <div class="table-scroll"><table class="data-table"><thead><tr><th>Date</th><th>Check-in</th><th>Break (1h)</th><th>Check-out</th><th>Net Duration</th><th>Status</th><th>GPS</th></tr></thead><tbody>
+    {% for row in history %}
+    <tr>
+      <td><span class="table-primary">{{ row.attendance_date.strftime('%d %b %Y') }}</span><small class="table-secondary">{{ row.attendance_date.strftime('%A') }}</small></td>
+      <td>{{ row.checkin_at.strftime('%I:%M %p') }}</td>
+      <td><span class="table-primary">{{ row.break_display }}</span></td>
+      <td>{{ row.checkout_at.strftime('%I:%M %p') if row.checkout_at else '— —' }}</td>
+      <td>{{ row.duration_display }}</td>
+      <td>
+        <span class="badge badge-{{ row.status|lower }}"><span></span>{{ row.status }}</span>
+        {% if row.is_grace_period or row.exception_granted %}
+        <small style="display:block;color:#1e7e34;font-size:10px;font-weight:700;margin-top:3px"><i class="bi bi-shield-check"></i> 15m Exception</small>
+        {% endif %}
+      </td>
+      <td><span class="gps-state"><i class="bi bi-geo-alt-fill"></i> Captured</span></td>
+    </tr>
+    {% endfor %}
+  </tbody></table></div>
+  {% else %}
+  <div class="empty-state compact-empty"><span class="empty-icon"><i class="bi bi-clock-history"></i></span><strong>No attendance records yet</strong><p>Your recorded shifts will appear here after a successful GPS check-in.</p></div>
+  {% endif %}
+</section>
+
+{% else %}
+{# Admin and manager view: kept exactly as it is #}
+<div class="page-heading heading-with-action">
+  <div><div class="eyebrow"><span></span> {{ current_user.role|upper }} WORKSPACE</div><h1>Good {{ 'morning' if now.strftime('%H')|int < 12 else ('afternoon' if now.strftime('%H')|int < 17 else 'evening') }}, {{ current_user.full_name.split()[0] }}<span class="heading-period">.</span></h1><p>Here's what's happening with your workforce today.</p></div>
+  <form method="get" class="date-picker-form"><label for="dashboard-date"><i class="bi bi-calendar3"></i> Date</label><input id="dashboard-date" type="date" name="date" value="{{ data.selected_date.isoformat() }}" max="{{ today.isoformat() }}"><button type="submit" class="btn btn-outline btn-sm">Apply</button></form>
+</div>
+{% if not data.is_workday %}<div class="notice-banner"><i class="bi bi-info-circle"></i><div><strong>Non-working day</strong><span>Absence and attendance-rate metrics use a Monday–Friday working-week assumption.</span></div></div>{% endif %}
+<div class="kpi-grid">
+  <article class="kpi-card"><div class="kpi-top"><span class="kpi-label">Active employees</span><span class="kpi-icon icon-indigo"><i class="bi bi-people"></i></span></div><div class="kpi-value">{{ data.total_employees }}</div><div class="kpi-foot"><span class="kpi-dot dot-indigo"></span>{{ current_user.department if current_user.role == 'manager' else 'Across the organization' }}</div></article>
+  <article class="kpi-card"><div class="kpi-top"><span class="kpi-label">Present</span><span class="kpi-icon icon-green"><i class="bi bi-person-check"></i></span></div><div class="kpi-value">{{ data.present }}<small>{% if data.total_employees %}/ {{ data.total_employees }}{% endif %}</small></div><div class="kpi-foot"><span class="status-dot status-present"></span>Checked in on selected date</div></article>
+  <article class="kpi-card"><div class="kpi-top"><span class="kpi-label">Absent</span><span class="kpi-icon icon-amber"><i class="bi bi-person-dash"></i></span></div><div class="kpi-value">{{ data.absent }}</div><div class="kpi-foot"><span class="status-dot status-absent"></span>{% if data.is_workday %}No valid check-in recorded{% else %}Not counted on weekends{% endif %}</div></article>
+  <article class="kpi-card"><div class="kpi-top"><span class="kpi-label">Late arrivals</span><span class="kpi-icon icon-rose"><i class="bi bi-clock-history"></i></span></div><div class="kpi-value">{{ data.late }}</div><div class="kpi-foot"><span class="status-dot status-late"></span>After 09:00 AM shift start</div></article>
+  <article class="kpi-card kpi-rate"><div class="kpi-top"><span class="kpi-label">Attendance rate</span><span class="kpi-icon icon-blue"><i class="bi bi-graph-up-arrow"></i></span></div><div class="kpi-value">{{ data.attendance_rate }}<small>%</small></div><div class="kpi-progress"><span style="width: {{ data.attendance_rate }}%"></span></div><div class="kpi-foot">Based on active employees scheduled today</div></article>
+</div>
+<div class="dashboard-grid">
+  <section class="panel trend-panel"><div class="panel-header"><div><h2>Attendance trend</h2><p>Check-ins over the last seven days</p></div><span class="panel-tag"><span class="legend-dot"></span> Present</span></div><div class="chart-wrap"><canvas id="attendanceTrend" aria-label="Attendance trend chart" role="img"></canvas><div id="trendFallback" class="chart-fallback" hidden>Chart library unavailable. Your attendance records are still available below.</div></div></section>
+  <section class="panel distribution-panel"><div class="panel-header"><div><h2>Today's distribution</h2><p>Attendance status overview</p></div><span class="subtle-icon"><i class="bi bi-pie-chart"></i></span></div><div class="donut-wrap"><canvas id="attendanceDistribution" aria-label="Attendance distribution chart" role="img"></canvas><div class="donut-center"><strong>{{ data.present }}</strong><span>Present</span></div></div><div class="distribution-legend"><div><span class="legend-dot legend-green"></span><span>Present</span><strong>{{ data.present }}</strong></div><div><span class="legend-dot legend-amber"></span><span>Absent</span><strong>{{ data.absent }}</strong></div><div><span class="legend-dot legend-rose"></span><span>Late arrivals</span><strong>{{ data.late }}</strong></div></div></section>
+</div>
+<section class="panel records-panel"><div class="panel-header panel-header-records"><div><h2>Recent attendance</h2><p>Latest check-ins for {{ data.selected_date.strftime('%d %B %Y') }}</p></div><a class="btn btn-outline btn-sm" href="{{ url_for('records') }}">View all records <i class="bi bi-arrow-up-right"></i></a></div>
+  {% if data.recent %}<div class="table-scroll"><table class="data-table"><thead><tr><th>Employee</th><th>Check-in</th><th>Break (1h)</th><th>Check-out</th><th>Status</th><th>GPS capture</th></tr></thead><tbody>
+  {% for row in data.recent %}<tr><td><div class="person-cell"><span class="avatar avatar-soft">{{ row.user.initials }}</span><span><strong>{{ row.user.full_name }}</strong><small>{% if row.user.employee_id.startswith('SYS-') %}Login: {{ row.user.employee_id }}{% else %}ID: {{ row.user.employee_id }}{% endif %} · {{ row.user.department }}</small></span></div></td><td><span class="table-primary">{{ row.checkin_at.strftime('%I:%M %p') }}</span><small class="table-secondary">{{ row.attendance_date.strftime('%d %b %Y') }}</small></td><td><span class="table-primary">{{ row.break_display }}</span></td><td>{% if row.checkout_at %}<span class="table-primary">{{ row.checkout_at.strftime('%I:%M %p') }}</span>{% else %}<span class="table-secondary">In progress</span>{% endif %}</td><td><span class="badge badge-{{ row.status|lower }}"><span></span>{{ row.status }}</span>{% if row.is_grace_period or row.exception_granted %}<small style="display:block;color:#1e7e34;font-size:10px;font-weight:700;margin-top:2px"><i class="bi bi-shield-check"></i> 15m Exception</small>{% endif %}</td><td><span class="gps-state"><i class="bi bi-geo-alt-fill"></i> Captured</span></td></tr>{% endfor %}
+  </tbody></table></div>{% else %}<div class="empty-state"><span class="empty-icon"><i class="bi bi-calendar2-check"></i></span><strong>No attendance records yet</strong><p>Records for the selected date will appear here after a successful GPS check-in.</p><a href="{{ url_for('attendance_page') }}" class="btn btn-primary btn-sm">Go to my attendance <i class="bi bi-arrow-right"></i></a></div>{% endif %}
+</section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if is_employee %}
+<script src="{{ url_for('static', filename='js/attendance.js') }}"></script>
+{% else %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script>
+window.dashboardData = {{ {'labels': data.trend|map(attribute='label')|list, 'values': data.trend|map(attribute='present')|list, 'present': data.present, 'absent': data.absent, 'late': data.late}|tojson }};
+</script>
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+{% endif %}
+{% endblock %}

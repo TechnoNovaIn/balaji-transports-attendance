@@ -1,0 +1,238 @@
+{% extends 'base.html' %}
+{% block title %}Attendance records{% endblock %}
+{% block breadcrumb %}Attendance records{% endblock %}
+{% block content %}
+<div class="page-heading heading-with-action">
+  <div>
+    <div class="eyebrow"><span></span> ATTENDANCE LOG</div>
+    <h1>Attendance records<span class="heading-period">.</span></h1>
+    <p>Review recorded shifts, timestamps, break buffers, and issue resolutions.</p>
+  </div>
+  {% if current_user.role in ['admin','manager'] %}
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <button type="button" class="btn btn-primary" onclick="openManualModal()"><i class="bi bi-person-fill-gear"></i> Resolve Candidate Attendance</button>
+    <a href="{{ url_for('reports') }}" class="btn btn-outline"><i class="bi bi-file-earmark-bar-graph"></i> Open reports</a>
+  </div>
+  {% endif %}
+</div>
+
+<section class="panel list-panel">
+  <form class="filter-bar filter-bar-wrap" method="get">
+    <div class="search-box"><i class="bi bi-search"></i><input type="search" name="q" value="{{ search }}" placeholder="Search employee or ID" aria-label="Search attendance records"></div>
+    <div class="date-filter"><label for="start">From</label><input type="date" id="start" name="start" value="{{ start_date.isoformat() if start_date else '' }}"></div>
+    <div class="date-filter"><label for="end">To</label><input type="date" id="end" name="end" value="{{ end_date.isoformat() if end_date else '' }}"></div>
+    {% if current_user.role in ['admin','manager'] %}
+    <select name="employee" aria-label="Filter by employee">
+      <option value="">All employees</option>
+      {% for employee in employees %}
+      <option value="{{ employee.id }}" {% if employee_filter|string == employee.id|string %}selected{% endif %}>{{ employee.full_name }}</option>
+      {% endfor %}
+    </select>
+    {% endif %}
+    <button type="submit" class="btn btn-primary"><i class="bi bi-funnel"></i> Apply filters</button>
+    <a href="{{ url_for('records') }}" class="btn btn-ghost">Reset</a>
+  </form>
+
+  {% if records %}
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead>
+        <tr>
+          {% if current_user.role != 'employee' %}<th>Employee</th>{% endif %}
+          <th>Date</th>
+          <th>Check-in</th>
+          <th>Break (1h)</th>
+          <th>Check-out</th>
+          <th>Net Duration</th>
+          <th>Status</th>
+          <th>GPS</th>
+          {% if current_user.role in ['admin','manager'] %}<th>Actions</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in records %}
+        <tr>
+          {% if current_user.role != 'employee' %}
+          <td>
+            <div class="person-cell">
+              <span class="avatar avatar-soft">{{ row.user.initials }}</span>
+              <span>
+                <strong>{{ row.user.full_name }}</strong>
+                <small>{% if row.user.employee_id.startswith('SYS-') %}Login: {{ row.user.employee_id }}{% else %}ID: {{ row.user.employee_id }}{% endif %} · {{ row.user.department }}</small>
+              </span>
+            </div>
+          </td>
+          {% endif %}
+          <td>
+            <span class="table-primary">{{ row.attendance_date.strftime('%d %b %Y') }}</span>
+            <small class="table-secondary">{{ row.attendance_date.strftime('%A') }}</small>
+          </td>
+          <td>{{ row.checkin_at.strftime('%I:%M %p') }}</td>
+          <td><span class="table-primary">{{ row.break_display }}</span></td>
+          <td>{{ row.checkout_at.strftime('%I:%M %p') if row.checkout_at else '— —' }}</td>
+          <td>{{ row.duration_display }}</td>
+          <td>
+            <span class="badge badge-{{ row.status|lower }}"><span></span>{{ row.status }}</span>
+            {% if row.is_grace_period or row.exception_granted %}
+            <small style="display:block;color:#1e7e34;font-size:10px;font-weight:700;margin-top:2px"><i class="bi bi-shield-check"></i> 15m Exception</small>
+            {% endif %}
+            {% if row.marked_by_admin %}
+            <small style="display:block;color:#3b5bdb;font-size:10px;font-weight:700;margin-top:2px" title="{{ row.admin_note }}"><i class="bi bi-wrench-adjustable"></i> Admin Resolved</small>
+            {% if row.admin_note %}
+            <small style="display:block;color:#6b7280;font-size:9px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ row.admin_note }}">{{ row.admin_note }}</small>
+            {% endif %}
+            {% endif %}
+          </td>
+          <td>
+            <a class="gps-link" target="_blank" rel="noopener" href="https://www.google.com/maps?q={{ row.checkin_latitude }},{{ row.checkin_longitude }}" title="Open check-in location on map">
+              <i class="bi bi-geo-alt-fill"></i> View location
+            </a>
+          </td>
+          {% if current_user.role in ['admin','manager'] %}
+          <td>
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+              {% if not row.checkout_at %}
+              <form method="post" action="{{ url_for('quick_checkout', record_id=row.id) }}" style="display:inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="btn btn-outline btn-xs" style="padding:2px 8px;font-size:11px" title="Mark check-out for offline candidate whose phone died"><i class="bi bi-box-arrow-right"></i> Mark check-out</button>
+              </form>
+              {% endif %}
+              {% if row.status == 'Late' and not row.exception_granted %}
+              <form method="post" action="{{ url_for('grant_attendance_exception', record_id=row.id) }}" style="display:inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="btn btn-outline btn-xs" style="padding:2px 8px;font-size:11px" title="Provide 15-minute exception"><i class="bi bi-shield-plus"></i> Grant 15m exception</button>
+              </form>
+              {% elif row.exception_granted %}
+              <span class="text-success" style="font-size:11px;font-weight:600"><i class="bi bi-check-circle"></i> Exception granted</span>
+              {% elif row.checkout_at %}
+              <span class="table-secondary">—</span>
+              {% endif %}
+            </div>
+          </td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="table-footer">
+    <span>Showing <strong>{{ records|length }}</strong> record{{ '' if records|length == 1 else 's' }} (maximum 250)</span>
+    <span><i class="bi bi-geo-alt"></i> Attendance records & buffer tracking</span>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <span class="empty-icon"><i class="bi bi-calendar2-x"></i></span>
+    <strong>No matching records</strong>
+    <p>Attendance records will appear after shifts are recorded. Adjust your filters or use Admin Resolution to mark attendance.</p>
+    {% if current_user.role in ['admin', 'manager'] %}
+    <button type="button" class="btn btn-primary btn-sm" onclick="openManualModal()"><i class="bi bi-person-fill-gear"></i> Resolve Attendance</button>
+    {% else %}
+    <a href="{{ url_for('attendance_page') }}" class="btn btn-primary btn-sm">My attendance</a>
+    {% endif %}
+  </div>
+  {% endif %}
+</section>
+
+{% if current_user.role in ['admin', 'manager'] %}
+<!-- Modal for candidate-wise issue resolution by Admin -->
+<div id="manualAttendanceModal" style="display:none;position:fixed;inset:0;background:rgba(19,38,71,0.55);z-index:9999;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(4px)">
+  <div style="background:#fff;border-radius:14px;max-width:540px;width:100%;box-shadow:0 12px 36px rgba(0,0,0,0.2);overflow:hidden;animation:fadeIn 0.2s ease">
+    <div style="padding:18px 24px;border-bottom:1px solid #edf0f5;display:flex;align-items:center;justify-content:space-between">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="height:34px;width:34px;border-radius:9px;background:#eef2ff;color:#4563eb;display:grid;place-items:center;font-size:16px"><i class="bi bi-person-fill-gear"></i></span>
+        <div>
+          <strong style="font-size:14px;color:#182642;display:block">Resolve Candidate Attendance</strong>
+          <small style="font-size:11px;color:#8591a5">Candidate phone switched off, broken, or offline</small>
+        </div>
+      </div>
+      <button type="button" onclick="closeManualModal()" style="border:0;background:none;font-size:20px;color:#9aa4b5;cursor:pointer;padding:4px"><i class="bi bi-x-lg"></i></button>
+    </div>
+    <form method="post" action="{{ url_for('manual_mark_attendance') }}" style="padding:22px 24px">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      
+      <div class="form-field" style="margin-bottom:14px">
+        <label for="candidateSelect" style="font-size:11px;font-weight:700;color:#35425a">Select Candidate Employee *</label>
+        <select id="candidateSelect" name="user_id" required style="width:100%;height:38px;border:1px solid #dce2ec;border-radius:8px;padding:0 10px;font-size:12px">
+          <option value="">-- Choose employee --</option>
+          {% for emp in employees %}
+          <option value="{{ emp.id }}">{{ emp.full_name }} ({{ emp.phone or emp.employee_id or 'No phone' }}) · {{ emp.department }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+        <div class="form-field">
+          <label style="font-size:11px;font-weight:700;color:#35425a">Attendance Date *</label>
+          <input type="date" name="attendance_date" value="{{ today.isoformat() }}" required style="width:100%;height:38px;border:1px solid #dce2ec;border-radius:8px;padding:0 10px;font-size:12px">
+        </div>
+        <div class="form-field">
+          <label style="font-size:11px;font-weight:700;color:#35425a">Check-in Time *</label>
+          <input type="time" name="checkin_time" value="10:00" required style="width:100%;height:38px;border:1px solid #dce2ec;border-radius:8px;padding:0 10px;font-size:12px">
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+        <div class="form-field">
+          <label style="font-size:11px;font-weight:700;color:#35425a">Check-out Time (optional)</label>
+          <input type="time" name="checkout_time" value="19:00" style="width:100%;height:38px;border:1px solid #dce2ec;border-radius:8px;padding:0 10px;font-size:12px">
+        </div>
+        <div class="form-field">
+          <label style="font-size:11px;font-weight:700;color:#35425a">Issue Reason *</label>
+          <select name="issue_reason" id="issueReasonSelect" onchange="toggleCustomReason(this.value)" style="width:100%;height:38px;border:1px solid #dce2ec;border-radius:8px;padding:0 10px;font-size:12px">
+            <option value="Phone switched off / dead battery">Phone switched off / dead battery</option>
+            <option value="Phone broken / damaged device">Phone broken / damaged device</option>
+            <option value="Technical / network access issue">Technical / network access issue</option>
+            <option value="Forgot phone / device unavailable">Forgot phone / device unavailable</option>
+            <option value="Candidate verified by Admin">Candidate verified by Admin</option>
+            <option value="custom">Other / Custom note...</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-field" id="customReasonField" style="display:none;margin-bottom:14px">
+        <label style="font-size:11px;font-weight:700;color:#35425a">Custom Issue Description</label>
+        <input type="text" name="admin_note" placeholder="Explain the issue candidate faced..." style="width:100%;height:38px;border:1px solid #dce2ec;border-radius:8px;padding:0 10px;font-size:12px">
+      </div>
+
+      <div style="background:#f8faff;border:1px solid #e2eaf8;border-radius:9px;padding:12px;margin-bottom:16px;display:flex;flex-direction:column;gap:9px">
+        <label style="display:flex;align-items:center;gap:8px;font-size:11px;font-weight:600;color:#293650;cursor:pointer">
+          <input type="checkbox" name="include_break" value="1" checked style="accent-color:#4563eb">
+          <span>Record standard 1-hour break buffer (01:00 PM – 02:00 PM)</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:11px;font-weight:600;color:#293650;cursor:pointer">
+          <input type="checkbox" name="grant_exception" value="1" checked style="accent-color:#4563eb">
+          <span>Provide 15-minute buffer / late exception (Mark as Present)</span>
+        </label>
+      </div>
+
+      <div style="display:flex;align-items:center;justify-content:flex-end;gap:10px">
+        <button type="button" onclick="closeManualModal()" class="btn btn-ghost">Cancel</button>
+        <button type="submit" class="btn btn-primary"><i class="bi bi-check2-circle"></i> Save & Mark Attendance</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+function openManualModal() {
+  document.getElementById('manualAttendanceModal').style.display = 'flex';
+}
+function closeManualModal() {
+  document.getElementById('manualAttendanceModal').style.display = 'none';
+}
+function toggleCustomReason(val) {
+  const f = document.getElementById('customReasonField');
+  if (val === 'custom') {
+    f.style.display = 'block';
+  } else {
+    f.style.display = 'none';
+  }
+}
+document.getElementById('manualAttendanceModal').addEventListener('click', function(e) {
+  if (e.target === this) {
+    closeManualModal();
+  }
+});
+</script>
+{% endif %}
+{% endblock %}

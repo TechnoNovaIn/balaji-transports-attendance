@@ -1,0 +1,28 @@
+{% extends 'base.html' %}
+{% block title %}Sign in{% endblock %}
+{% block public_content %}
+<div class="login-layout">
+  <section class="login-art">
+    <div class="login-brand"><span class="brand-mark"><i class="bi bi-boxes"></i></span><span class="brand-copy"><strong>Balaji<span>.</span></strong><small>TRANSPORTS</small></span></div>
+    <div class="login-art-main"><div class="eyebrow light"><span></span> PEOPLE OPERATIONS, SIMPLIFIED</div><h1>A smarter way to manage your <em>workforce.</em></h1><p>One clear view of attendance, shifts, and daily operations — designed for teams on the move.</p>
+      <div class="login-stat-row"><div><strong>Attendance</strong><span>15m buffer & breaks</span></div><div><strong>Universal access</strong><span>Fast, unified sign-in</span></div></div>
+    </div>
+    <div class="login-art-footer"><span><i class="bi bi-shield-check"></i> Secure sign-in</span><span><i class="bi bi-geo-alt"></i> GPS attendance</span><span><i class="bi bi-clock-history"></i> Break buffer tracking</span></div>
+    <div class="art-orb orb-one"></div><div class="art-orb orb-two"></div>
+  </section>
+  <section class="login-panel">
+    <div class="login-card-wrap"><div class="mobile-login-brand"><span class="brand-mark"><i class="bi bi-boxes"></i></span><span class="brand-copy"><strong>Balaji<span>.</span></strong><small>TRANSPORTS</small></span></div>
+      <div class="login-heading"><div class="eyebrow"><span></span> WORKFORCE PORTAL</div><h2>Sign in to your account</h2><p>Sign in using your Gmail / work email, registered mobile number, or full name.</p></div>
+      {% with messages = get_flashed_messages(with_categories=true) %}{% if messages %}<div class="flash-stack">{% for category,message in messages %}<div class="flash flash-{{ category }}">{{ message }}</div>{% endfor %}</div>{% endif %}{% endwith %}
+      <form method="post" class="login-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label for="identifier">Email, Mobile Number, or Full Name</label><div class="input-with-icon"><i class="bi bi-person-badge"></i><input id="identifier" type="text" name="identifier" placeholder="Gmail / email, mobile number, or name" autocomplete="username" required autofocus></div>
+        <div class="label-row"><label for="password">Password</label></div><div class="input-with-icon"><i class="bi bi-lock"></i><input id="password" type="password" name="password" placeholder="Enter your password" autocomplete="current-password" required><button type="button" class="password-toggle" aria-label="Show password" id="togglePassword"><i class="bi bi-eye"></i></button></div>
+        <button type="submit" class="btn btn-primary btn-full">Sign in <i class="bi bi-arrow-right"></i></button>
+      </form>
+      <div class="login-security"><i class="bi bi-shield-check"></i><span>Universal workforce sign-in with 15-minute grace buffer & issue resolution.</span></div>
+    </div><div class="login-panel-footer">Built for connected, accountable teams.</div>
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}<script>const togglePassword=document.getElementById('togglePassword');if(togglePassword){togglePassword.addEventListener('click',()=>{const input=document.getElementById('password');const visible=input.type==='password';input.type=visible?'text':'password';togglePassword.innerHTML=visible?'<i class="bi bi-eye-slash"></i>':'<i class="bi bi-eye"></i>';togglePassword.setAttribute('aria-label',visible?'Hide password':'Show password');});}</script>{% endblock %}

@@ -1,0 +1,44 @@
+{% extends 'base.html' %}
+{% block title %}Daily owner report{% endblock %}
+{% block breadcrumb %}Reports / Daily owner report{% endblock %}
+{% block content %}
+<div class="page-heading heading-with-action">
+  <div>
+    <div class="eyebrow"><span></span> END-OF-DAY SUMMARY</div>
+    <h1>Daily attendance report<span class="heading-period">.</span></h1>
+    <p>A simple end-of-day summary showing each employee’s login and logout status only. No attendance times are displayed.</p>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <a class="btn btn-primary" href="{{ url_for('daily_owner_report_csv', date=report_day.isoformat()) }}"><i class="bi bi-filetype-csv"></i> Download daily CSV</a>
+    <a class="btn btn-outline" href="{{ url_for('reports') }}"><i class="bi bi-arrow-left"></i> All reports</a>
+  </div>
+</div>
+<section class="panel report-filter-panel">
+  <form class="filter-bar" method="get">
+    <div class="date-filter"><label for="date">Report date</label><input id="date" name="date" type="date" value="{{ report_day.isoformat() }}" required></div>
+    <button class="btn btn-outline" type="submit"><i class="bi bi-calendar-check"></i> Generate report</button>
+    <span class="report-period">{{ report_day.strftime('%A, %d %B %Y') }}</span>
+  </form>
+</section>
+<div class="report-metrics daily-report-metrics">
+  <article class="report-metric"><span class="report-metric-icon icon-green"><i class="bi bi-person-check"></i></span><div><span>Checked in</span><strong>{{ present_count }}</strong></div></article>
+  <article class="report-metric"><span class="report-metric-icon icon-amber"><i class="bi bi-clock-history"></i></span><div><span>Late arrivals</span><strong>{{ late_count }}</strong></div></article>
+  <article class="report-metric"><span class="report-metric-icon icon-indigo"><i class="bi bi-person-x"></i></span><div><span>Absent</span><strong>{{ absent_count }}</strong></div></article>
+  <article class="report-metric"><span class="report-metric-icon icon-amber"><i class="bi bi-box-arrow-right"></i></span><div><span>Pending check-out</span><strong>{{ pending_checkout_count }}</strong></div></article>
+</div>
+<section class="panel list-panel">
+  <div class="panel-header inside-panel-header"><div><h2>Employee attendance</h2><p>{{ rows|length }} active workforce account(s) for the selected date.</p></div></div>
+  {% if rows %}
+  <div class="table-scroll"><table class="data-table"><thead><tr><th>Employee name</th><th>Login status</th><th>Logout status</th></tr></thead><tbody>
+    {% for row in rows %}
+    <tr>
+      <td><strong>{{ row.employee_name }}</strong></td>
+      <td>{% if row.login_status in ['Normal'] %}<span class="badge badge-present"><span></span>{{ row.login_status }}</span>{% elif row.login_status == 'Late' %}<span class="badge badge-late"><span></span>Late</span>{% elif row.login_status == 'Absent' %}<span class="badge badge-late"><span></span>Absent</span>{% else %}<span class="badge badge-absent"><span></span>{{ row.login_status }}</span>{% endif %}</td>
+      <td>{% if row.logout_status == 'On Time' %}<span class="badge badge-present"><span></span>On Time</span>{% elif row.logout_status == 'Early' %}<span class="badge badge-late"><span></span>Early</span>{% elif row.logout_status == 'Pending' %}<span class="badge badge-absent"><span></span>Pending</span>{% else %}{{ row.logout_status }}{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody></table></div>
+  {% else %}<div class="empty-state"><strong>No active employees found</strong><p>Create employee accounts to see the daily attendance report.</p></div>{% endif %}
+  <div class="table-footer"><span>Shows attendance statuses only; no check-in or check-out times.</span><span><i class="bi bi-shield-lock"></i> Owner/admin access only</span></div>
+</section>
+{% endblock %}

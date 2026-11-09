@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: balaji-workforce
+    env: python
+    region: singapore
+    plan: free
+    buildCommand: "pip install -r requirements.txt && python scripts/init_db.py && python scripts/seed_demo.py"
+    startCommand: "gunicorn --workers=2 --threads=4 --timeout=120 --bind=0.0.0.0:$PORT wsgi:app"
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: SESSION_COOKIE_SECURE
+        value: "1"
+      - key: GEOFENCE_LATITUDE
+        value: "13.3698889"
+      - key: GEOFENCE_LONGITUDE
+        value: "77.1190278"
+      - key: GEOFENCE_RADIUS_METERS
+        value: "200"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: balaji-workforce-db
+          property: connectionString
+
+databases:
+  - name: balaji-workforce-db
+    plan: free
+    region: singapore
+    databaseName: balaji_workforce
+    user: balaji_admin

@@ -1,0 +1,39 @@
+BALAJI TRANSPORTS — UPDATED PROJECT BUNDLE
+
+This bundle adds the Daily Owner Report and makes employee ID and email optional in the employee form.
+
+KEY CHANGES
+- Admin can open Reports → Daily owner report to select a date and review active workforce accounts.
+- Daily owner report and its CSV contain only Employee Name, Login Status, and Logout Status; login/logout timings are omitted.
+- Missing check-out is shown as Pending; the report does not falsely label it On Time.
+- Past weekdays with no attendance are marked Absent. For today's report, no attendance is marked Absent only after 7:00 PM.
+- Employee ID and email are no longer required in Add/Edit Employee.
+- If Employee ID is blank, an internal SYS-XXXXXXXX reference is generated. Employees can sign in using their full name OR this assigned login ID and password on /employee-login. Admin/Manager accounts sign in using work email and password.
+- Employee email is optional. If email is blank, a non-deliverable placeholder is stored internally for compatibility with the existing SQLite schema; the interface displays “No email provided.” Admin/Manager accounts require a work email.
+- requirements.txt includes Gunicorn for the configured Render start command.
+
+APPLY
+1. Stop the Flask server with Ctrl+C.
+2. Back up the existing project folder and database.
+3. Extract this ZIP into E:\Balaji_Workforce_System\balaji-workforce, allowing project files to be overwritten.
+4. Do not delete the instance database or .git folder.
+5. Run: .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+6. Run: .\.venv\Scripts\python.exe -m pytest -q
+7. Start: .\.venv\Scripts\python.exe app.py
+8. Open Reports → Daily owner report while signed in as Admin.
+
+The Daily Owner Report is generated on demand when the page is opened or the Generate report button is pressed. It is not yet an automatically emailed or scheduled report.
+
+Owner report columns: Employee Name, Login Status, and Logout Status only. Check-in and check-out times are not shown in the owner daily report or its CSV download.
+
+LOGIN POLICY UPDATE
+- Admin and Manager: use the separate /login page with registered work email + password.
+- Employee: use the separate /employee-login page with exact full name OR assigned login ID + password.
+- Active employee full names should be unique; if names collide, the employee can use their assigned login ID.
+- Employee email is not accepted as an employee login identifier. The generated SYS-XXXXXXXX reference IS accepted on the Employee Login page.
+
+LOGIN UPDATE (2026-10-23):
+- Admin/Manager login is at /login and requires a registered work email plus password.
+- Employee login is at /employee-login and accepts the employee's exact full name OR their assigned login ID plus password.
+- The Employee Login page link is shown on the Admin/Manager page and vice versa.
+- After creating an employee without an ID, the admin success message shows the generated SYS-... login ID. The Employees directory also shows that login ID.

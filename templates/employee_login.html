@@ -1,0 +1,29 @@
+{% extends 'base.html' %}
+{% block title %}Employee sign in{% endblock %}
+{% block public_content %}
+<div class="login-layout">
+  <section class="login-art">
+    <div class="login-brand"><span class="brand-mark"><i class="bi bi-boxes"></i></span><span class="brand-copy"><strong>Balaji<span>.</span></strong><small>TRANSPORTS</small></span></div>
+    <div class="login-art-main"><div class="eyebrow light"><span></span> EMPLOYEE ATTENDANCE</div><h1>Your attendance, <em>made simple.</em></h1><p>Sign in with your name or assigned login ID. No email address or company-issued employee ID is required.</p>
+      <div class="login-stat-row"><div><strong>Check in</strong><span>Location-aware attendance</span></div><div><strong>Stay informed</strong><span>View your own records</span></div></div>
+    </div>
+    <div class="login-art-footer"><span><i class="bi bi-person-check"></i> Employee access</span><span><i class="bi bi-geo-alt"></i> GPS attendance</span><span><i class="bi bi-clock"></i> Attendance history</span></div>
+    <div class="art-orb orb-one"></div><div class="art-orb orb-two"></div>
+  </section>
+  <section class="login-panel">
+    <div class="login-card-wrap"><div class="mobile-login-brand"><span class="brand-mark"><i class="bi bi-boxes"></i></span><span class="brand-copy"><strong>Balaji<span>.</span></strong><small>TRANSPORTS</small></span></div>
+      <div class="login-heading"><div class="eyebrow"><span></span> EMPLOYEE LOGIN</div><h2>Welcome to your workspace</h2><p>Enter your phone number, full name or assigned employee login ID and password.</p></div>
+      {% with messages = get_flashed_messages(with_categories=true) %}{% if messages %}<div class="flash-stack">{% for category,message in messages %}<div class="flash flash-{{ category }}">{{ message }}</div>{% endfor %}</div>{% endif %}{% endwith %}
+      <form method="post" class="login-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label for="identifier">Employee phone, full name or assigned employee login ID</label><div class="input-with-icon"><i class="bi bi-person-badge"></i><input id="identifier" type="text" name="identifier" placeholder="Phone number, full name or login ID" autocomplete="username" required autofocus></div>
+        <div class="label-row"><label for="password">Password</label></div><div class="input-with-icon"><i class="bi bi-lock"></i><input id="password" type="password" name="password" placeholder="Enter your password" autocomplete="current-password" required><button type="button" class="password-toggle" aria-label="Show password" id="togglePassword"><i class="bi bi-eye"></i></button></div>
+        <button type="submit" class="btn btn-primary btn-full">Employee sign in <i class="bi bi-arrow-right"></i></button>
+      </form>
+      <div class="login-security"><i class="bi bi-shield-lock"></i><span>Your attendance records are restricted to your account.</span></div>
+      <div class="demo-hint"><strong>Admin or Manager?</strong><span>Use your registered work email on the admin/manager login page.</span><a class="btn btn-outline btn-full" href="{{ url_for('login') }}">Admin / Manager Login <i class="bi bi-arrow-right"></i></a></div>
+    </div><div class="login-panel-footer">Built for connected, accountable teams.</div>
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}<script>const togglePassword=document.getElementById('togglePassword');if(togglePassword){togglePassword.addEventListener('click',()=>{const input=document.getElementById('password');const visible=input.type==='password';input.type=visible?'text':'password';togglePassword.innerHTML=visible?'<i class="bi bi-eye-slash"></i>':'<i class="bi bi-eye"></i>';togglePassword.setAttribute('aria-label',visible?'Hide password':'Show password');});}</script>{% endblock %}

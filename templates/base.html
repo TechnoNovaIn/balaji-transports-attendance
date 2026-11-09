@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>{% block title %}Workspace{% endblock %} · {{ app_name }}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  {% block head %}{% endblock %}
+</head>
+<body>
+{% if current_user.is_authenticated %}
+<div class="app-shell">
+  <aside class="sidebar" id="sidebar">
+    <a class="brand" href="{{ url_for('dashboard') }}">
+      <span class="brand-mark"><i class="bi bi-boxes"></i></span>
+      <span class="brand-copy"><strong>Balaji<span>.</span></strong><small>TRANSPORTS</small></span>
+    </a>
+    <div class="sidebar-label">WORKSPACE</div>
+    <nav class="side-nav" aria-label="Main navigation">
+      {% if current_user.role in ['admin', 'manager'] %}
+      <a class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}"><i class="bi bi-grid-1x2"></i><span>Overview</span></a>
+      {% endif %}
+      <a class="nav-link {% if request.endpoint in ['attendance_page', 'dashboard'] and current_user.role == 'employee' %}active{% elif request.endpoint == 'attendance_page' %}active{% endif %}" href="{{ url_for('dashboard' if current_user.role == 'employee' else 'attendance_page') }}"><i class="bi bi-clock-history"></i><span>My attendance</span></a>
+      {% if current_user.role in ['admin', 'manager'] %}
+      <a class="nav-link {% if request.endpoint == 'employees' %}active{% endif %}" href="{{ url_for('employees') }}"><i class="bi bi-people"></i><span>Employees</span></a>
+      <a class="nav-link {% if request.endpoint == 'records' %}active{% endif %}" href="{{ url_for('records') }}"><i class="bi bi-calendar3"></i><span>Attendance records</span></a>
+      <a class="nav-link {% if request.endpoint in ['reports', 'reports_csv', 'reports_xlsx', 'daily_owner_report', 'daily_owner_report_csv'] %}active{% endif %}" href="{{ url_for('reports') }}"><i class="bi bi-file-earmark-bar-graph"></i><span>Reports</span></a>
+      {% endif %}
+    </nav>
+    <div class="sidebar-bottom">
+      <div class="help-card"><span class="help-icon"><i class="bi bi-shield-check"></i></span><div><strong>Secure workspace</strong><p>Access is managed by your role.</p></div></div>
+      <div class="sidebar-user">
+        <div class="avatar avatar-navy">{{ current_user.initials }}</div>
+        <div class="user-copy"><strong>{{ current_user.full_name }}</strong><small>{{ current_user.role|title }} · {{ current_user.department }}</small></div>
+        <form method="post" action="{{ url_for('logout') }}" class="logout-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="icon-button" type="submit" title="Sign out" aria-label="Sign out"><i class="bi bi-box-arrow-right"></i></button></form>
+      </div>
+    </div>
+  </aside>
+  <main class="main-area">
+    <header class="topbar">
+      <button class="mobile-menu icon-button" id="mobileMenu" aria-label="Toggle navigation"><i class="bi bi-list"></i></button>
+      <div class="breadcrumb"><span>Workspace</span><i class="bi bi-chevron-right"></i><strong>{% block breadcrumb %}Overview{% endblock %}</strong></div>
+      <div class="topbar-right"><span class="secure-label"><i class="bi bi-shield-lock"></i> Secure session</span><span class="top-date"><i class="bi bi-calendar4"></i> {{ today.strftime('%a, %d %b %Y') }}</span><div class="avatar avatar-blue">{{ current_user.initials }}</div></div>
+    </header>
+    <section class="page-content">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}<div class="flash-stack">{% for category, message in messages %}<div class="flash flash-{{ category }}"><i class="bi {% if category == 'success' %}bi-check-circle{% elif category == 'danger' %}bi-exclamation-circle{% else %}bi-info-circle{% endif %}"></i><span>{{ message }}</span><button class="flash-close" aria-label="Dismiss message" onclick="this.parentElement.remove()">×</button></div>{% endfor %}</div>{% endif %}
+      {% endwith %}
+      {% block content %}{% endblock %}
+      <footer class="page-footer"><span>© {{ today.year }} Balaji Transports</span><span>Attendance management <i class="bi bi-dot"></i> Prototype</span></footer>
+    </section>
+  </main>
+</div>
+{% else %}
+{% block public_content %}{% endblock %}
+{% endif %}
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

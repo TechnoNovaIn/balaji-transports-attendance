@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Balaji Navy Blue Background -->
+    <path
+        android:fillColor="#102442"
+        android:pathData="M0,0h108v108h-108z" />
+    <!-- Modern Gradient Inner Disc -->
+    <path
+        android:fillColor="#172F57"
+        android:pathData="M54,16 A38,38 0 1,0 54,92 A38,38 0 1,0 54,16 Z" />
+</vector>

@@ -1,0 +1,27 @@
+BALAJI TRANSPORTS — CONSOLIDATED UPDATED PROJECT
+
+This is the full project bundle, not a patch archive. It contains app.py, templates, static assets, scripts, requirements, and tests.
+
+NEW FEATURES IN THIS VERSION
+- Daily Owner Report at /reports/daily; access restricted to Admin.
+- Daily CSV download at /reports/daily.csv.
+- Daily owner report columns: Employee Name, Login Status, Logout Status only. Login/logout times are intentionally omitted.
+- Missing checkout is marked Pending. No-check-in past weekdays show Absent.
+- Employee ID and work email are optional in Add/Edit Employee.
+- Blank Employee ID generates an internal reference such as SYS-XXXXXXXX. Employees use /employee-login with their full name OR assigned login ID and password; Admin and Manager use /login with work email and password.
+- Employee email is optional and displayed as “No email provided.” Admin/Manager accounts require an email address.
+- Gunicorn is included in requirements for deployment.
+
+INSTALL/TEST ON WINDOWS
+1. Stop Flask using Ctrl+C. Back up the project and database.
+2. Extract the ZIP into E:\Balaji_Workforce_System\balaji-workforce, overwriting project files but preserving .git, .venv, and instance/balaji_workforce.sqlite3.
+3. Run .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+4. Run .\.venv\Scripts\python.exe -m pytest -q
+5. Run .\.venv\Scripts\python.exe app.py
+6. Sign in as Admin, open Reports, and choose Daily owner report.
+
+The automated test suite could not be executed in this packaging environment because Flask dependencies were unavailable offline. Run it on your laptop before pushing to GitHub or deploying to Render. The updated Python files passed syntax compilation here.
+
+Daily owner report displays only Employee Name, Login Status, and Logout Status. Login/logout times are intentionally omitted from both the page and daily CSV export.
+
+LOGIN POLICY: Admin/Manager use /login with work email. Employees use /employee-login with their exact full name OR assigned SYS-... login ID. Employee email is not used for employee login; if names collide, use the unique login ID.

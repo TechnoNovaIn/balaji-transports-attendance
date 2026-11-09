@@ -1,0 +1,15 @@
+<resources>
+    <string name="app_name">Balaji Workforce</string>
+    <string name="action_settings">Server Settings</string>
+    <string name="action_refresh">Refresh Page</string>
+    <string name="server_settings_title">Backend Server Configuration</string>
+    <string name="server_url_hint">e.g. http://10.0.2.2:5000 or http://localhost:5000</string>
+    <string name="btn_save">Connect &amp; Save</string>
+    <string name="btn_cancel">Cancel</string>
+    <string name="btn_preset_reverse">USB / Reverse (localhost:5000)</string>
+    <string name="btn_preset_emulator">Emulator (10.0.2.2:5000)</string>
+    <string name="connection_error_title">Unable to Connect</string>
+    <string name="connection_error_desc">Could not reach the Flask server. Please make sure the server is running on your laptop and check your connection settings.</string>
+    <string name="btn_retry">Retry Connection</string>
+    <string name="location_permission_rationale">Balaji Attendance requires precise location permissions to record GPS coordinates for punch-in and geofencing.</string>
+</resources>
