@@ -7,3 +7,5 @@ __pycache__/
 instance/*.sqlite3
 instance/*.db
 .coverage
+.env
+.env.example
