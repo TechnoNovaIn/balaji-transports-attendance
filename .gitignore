@@ -8,3 +8,6 @@ instance/*.sqlite3
 instance/*.db
 .coverage
 README.md
+.env
+.env.example
+readme.md
