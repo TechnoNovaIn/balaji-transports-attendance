@@ -9,3 +9,4 @@ instance/*.db
 .coverage
 .env
 .env.example
+readme
