@@ -1,26 +1,29 @@
 """Balaji Transports — attendance management demo application.
 
-This project is an interview prototype. Review README.md before using it beyond local demo.
 """
 from __future__ import annotations
 
 import csv
 import io
+import logging
 import math
 import os
 import secrets
-import xlsxwriter
+import threading
+import time as pytime
 from datetime import date, datetime, time, timedelta
 from functools import wraps
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import xlsxwriter
 from flask import (Flask, abort, current_app, flash, jsonify, make_response,
-                   redirect, render_template, request, url_for)
+                   redirect, render_template, request, send_file, url_for)
 from flask_login import (LoginManager, UserMixin, current_user, login_required,
                          login_user, logout_user)
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import UniqueConstraint, func, or_
+from sqlalchemy import UniqueConstraint, event, func, or_
+from sqlalchemy.engine import Engine
 from werkzeug.security import check_password_hash, generate_password_hash
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -29,62 +32,151 @@ DEFAULT_SHIFT_START = time(10, 0)
 DEFAULT_LATE_AFTER = time(10, 15)
 DEFAULT_SHIFT_END = time(19, 0)
 
+# Configure structured application logging
+logging.basicConfig(
+    level=logging.INFO if os.environ.get("FLASK_DEBUG") != "1" else logging.DEBUG,
+    format="[%(asctime)s] %(levelname)s in %(module)s: %(message)s",
+)
+
 app = Flask(__name__, instance_relative_config=True)
 
-_db_url = os.environ.get(
-    "DATABASE_URL", f"sqlite:///{(Path(app.instance_path) / 'balaji_workforce.sqlite3').as_posix()}"
-)
-if _db_url.startswith("postgres://"):
-    _db_url = _db_url.replace("postgres://", "postgresql+psycopg2://", 1)
-elif _db_url.startswith("postgresql://"):
-    _db_url = _db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+# Application Configuration
+env_name = os.environ.get("FLASK_ENV", "development" if os.environ.get("FLASK_DEBUG") == "1" else "production")
+default_secret = "dev-only-change-this-before-deployment"
+configured_secret = os.environ.get("SECRET_KEY", default_secret)
+
+# Safety check for production environment
+if env_name == "production" and os.environ.get("STRICT_PRODUCTION_SECRETS") == "1":
+    if not os.environ.get("SECRET_KEY") or configured_secret == default_secret:
+        raise RuntimeError(
+            "CRITICAL SECURITY CONFIGURATION ERROR: A strong, random SECRET_KEY must be supplied "
+            "via environment variables in production mode. Refusing to start."
+        )
+elif env_name == "production" and configured_secret == default_secret:
+    app.logger.warning("SECURITY WARNING: Using default development SECRET_KEY in production mode. Set SECRET_KEY in production.")
+
+# Reverse proxy support (ProxyFix) for Render, AWS ALB, Nginx, Caddy, Cloudflare
+# Enable when deployed behind a reverse proxy by setting ENABLE_PROXY_FIX=1
+if os.environ.get("ENABLE_PROXY_FIX", "0") == "1":
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    app.wsgi_app = ProxyFix(
+        app.wsgi_app,
+        x_for=int(os.environ.get("PROXY_FIX_FOR", "1")),
+        x_proto=int(os.environ.get("PROXY_FIX_PROTO", "1")),
+        x_host=int(os.environ.get("PROXY_FIX_HOST", "1")),
+        x_port=int(os.environ.get("PROXY_FIX_PORT", "1")),
+        x_prefix=int(os.environ.get("PROXY_FIX_PREFIX", "1")),
+    )
+
+# Predictable database path configuration
+Path(app.instance_path).mkdir(parents=True, exist_ok=True)
+raw_db_url = os.environ.get("DATABASE_URL")
+if not raw_db_url:
+    default_db_path = Path(app.instance_path) / "balaji_workforce.sqlite3"
+    database_uri = f"sqlite:///{default_db_path.as_posix()}"
+else:
+    # Normalize PostgreSQL URL schemes for SQLAlchemy (Render/Heroku supply postgres://)
+    if raw_db_url.startswith("postgres://"):
+        database_uri = raw_db_url.replace("postgres://", "postgresql://", 1)
+    elif raw_db_url.startswith("sqlite:///"):
+        database_uri = raw_db_url
+        db_file_path = Path(database_uri.replace("sqlite:///", ""))
+        if not db_file_path.is_absolute():
+            db_file_path = (BASE_DIR / db_file_path).resolve()
+        db_file_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        database_uri = raw_db_url
+
+# Connection pool tuning for PostgreSQL
+engine_options = {}
+if database_uri.startswith("postgresql://"):
+    engine_options = {
+        "pool_pre_ping": True,
+        "pool_recycle": int(os.environ.get("DB_POOL_RECYCLE", "300")),
+        "pool_size": int(os.environ.get("DB_POOL_SIZE", "10")),
+        "max_overflow": int(os.environ.get("DB_MAX_OVERFLOW", "20")),
+    }
+
+# Session cookie security:
+# Default to 0 so local HTTP access (http://localhost:5000, http://127.0.0.1:5000, http://192.168.x.x)
+# and Android WebView over HTTP can store session cookies without browsers dropping them.
+# In production over HTTPS, set SESSION_COOKIE_SECURE=1 in environment variables.
+session_cookie_secure = os.environ.get("SESSION_COOKIE_SECURE", "0") == "1"
 
 app.config.update(
-    SECRET_KEY=os.environ.get("SECRET_KEY", "dev-only-change-this-before-deployment"),
-    SQLALCHEMY_DATABASE_URI=_db_url,
+    SECRET_KEY=configured_secret,
+    SQLALCHEMY_DATABASE_URI=database_uri,
+    SQLALCHEMY_ENGINE_OPTIONS=engine_options,
     SQLALCHEMY_TRACK_MODIFICATIONS=False,
+    # Factory geofence configuration with environment variable override
     GEOFENCE_LATITUDE=os.environ.get("GEOFENCE_LATITUDE", "13.3698889"),
     GEOFENCE_LONGITUDE=os.environ.get("GEOFENCE_LONGITUDE", "77.1190278"),
     GEOFENCE_RADIUS_METERS=os.environ.get("GEOFENCE_RADIUS_METERS", "200"),
+    GEOFENCE_MAX_ACCURACY_METERS=float(os.environ.get("GEOFENCE_MAX_ACCURACY_METERS", "500")),
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE", "0") == "1",
+    SESSION_COOKIE_SECURE=session_cookie_secure,
+    SESSION_COOKIE_PATH="/",
     REMEMBER_COOKIE_HTTPONLY=True,
+    REMEMBER_COOKIE_SECURE=session_cookie_secure,
     PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
 )
-Path(app.instance_path).mkdir(parents=True, exist_ok=True)
 
 db = SQLAlchemy(app)
 
 
+@event.listens_for(Engine, "connect")
+def configure_sqlite_engine(dbapi_connection, connection_record):
+    """Enable SQLite foreign key constraint enforcement, WAL mode, and busy timeout for concurrent writes."""
+    import sqlite3
+    if isinstance(dbapi_connection, sqlite3.Connection):
+        try:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys = ON;")
+            cursor.execute("PRAGMA busy_timeout = 5000;")
+            # Enable WAL mode for high-concurrency production deployments (skip in test fixtures)
+            if not current_app.config.get("TESTING"):
+                cursor.execute("PRAGMA journal_mode = WAL;")
+            cursor.close()
+        except Exception:
+            pass
+
+
+
 def ensure_db_schema():
-    """Ensure database tables and columns exist for existing SQLite databases."""
+    """Ensure database tables and columns exist for existing databases without deleting records."""
     with app.app_context():
         try:
             db.create_all()
-            with db.engine.connect() as conn:
-                res = conn.execute(db.text("PRAGMA table_info(users)")).fetchall()
-                cols = {r[1] for r in res}
-                if "phone" not in cols:
-                    conn.execute(db.text("ALTER TABLE users ADD COLUMN phone VARCHAR(30)"))
-                if "shift_timing" not in cols:
-                    conn.execute(db.text("ALTER TABLE users ADD COLUMN shift_timing VARCHAR(40) DEFAULT '10:00 AM - 07:00 PM'"))
+            # Only execute SQLite-specific schema introspection PRAGMAs on SQLite databases
+            if db.engine.dialect.name == "sqlite":
+                with db.engine.connect() as conn:
+                    res = conn.execute(db.text("PRAGMA table_info(users)")).fetchall()
+                    cols = {r[1] for r in res}
+                    if "phone" not in cols:
+                        conn.execute(db.text("ALTER TABLE users ADD COLUMN phone VARCHAR(30)"))
+                    if "shift_timing" not in cols:
+                        conn.execute(db.text("ALTER TABLE users ADD COLUMN shift_timing VARCHAR(40) DEFAULT '10:00 AM - 07:00 PM'"))
 
-                att_res = conn.execute(db.text("PRAGMA table_info(attendance)")).fetchall()
-                att_cols = {r[1] for r in att_res}
-                if "break_start_at" not in att_cols:
-                    conn.execute(db.text("ALTER TABLE attendance ADD COLUMN break_start_at DATETIME"))
-                if "break_end_at" not in att_cols:
-                    conn.execute(db.text("ALTER TABLE attendance ADD COLUMN break_end_at DATETIME"))
-                if "exception_granted" not in att_cols:
-                    conn.execute(db.text("ALTER TABLE attendance ADD COLUMN exception_granted BOOLEAN DEFAULT 0"))
-                if "marked_by_admin" not in att_cols:
-                    conn.execute(db.text("ALTER TABLE attendance ADD COLUMN marked_by_admin BOOLEAN DEFAULT 0"))
-                if "admin_note" not in att_cols:
-                    conn.execute(db.text("ALTER TABLE attendance ADD COLUMN admin_note VARCHAR(255)"))
-                conn.commit()
-        except Exception:
-            pass
+                    att_res = conn.execute(db.text("PRAGMA table_info(attendance)")).fetchall()
+                    att_cols = {r[1] for r in att_res}
+                    if "break_start_at" not in att_cols:
+                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN break_start_at DATETIME"))
+                    if "break_end_at" not in att_cols:
+                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN break_end_at DATETIME"))
+                    if "exception_granted" not in att_cols:
+                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN exception_granted BOOLEAN DEFAULT 0"))
+                    if "marked_by_admin" not in att_cols:
+                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN marked_by_admin BOOLEAN DEFAULT 0"))
+                    if "admin_note" not in att_cols:
+                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN admin_note VARCHAR(255)"))
+                    if "checkin_accuracy" not in att_cols:
+                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN checkin_accuracy FLOAT"))
+                    if "checkout_accuracy" not in att_cols:
+                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN checkout_accuracy FLOAT"))
+                    conn.commit()
+        except Exception as exc:
+            app.logger.warning(f"Database schema inspection note: {exc}")
 
 
 ensure_db_schema()
@@ -157,6 +249,8 @@ class Attendance(db.Model):
     checkin_longitude = db.Column(db.Float, nullable=False)
     checkout_latitude = db.Column(db.Float, nullable=True)
     checkout_longitude = db.Column(db.Float, nullable=True)
+    checkin_accuracy = db.Column(db.Float, nullable=True)
+    checkout_accuracy = db.Column(db.Float, nullable=True)
     break_start_at = db.Column(db.DateTime, nullable=True)
     break_end_at = db.Column(db.DateTime, nullable=True)
     exception_granted = db.Column(db.Boolean, nullable=False, default=False)
@@ -340,11 +434,8 @@ def dashboard_data(selected_date: date) -> dict:
     records = attendance_for_dashboard(selected_date)
     present_ids = {row.user_id for row in records}
     present_count = len(present_ids)
-    expected_workday = selected_date.weekday() < 5
-    absent_count = max(0, len(roster) - present_count) if expected_workday else 0
+    absent_count = max(0, len(roster) - present_count)
     late_count = sum(1 for row in records if row.status == "Late")
-    expected_count = len(roster) if expected_workday else 0
-    attendance_rate = round((present_count / expected_count) * 100) if expected_count else 0
 
     trend_dates = []
     cursor = selected_date - timedelta(days=6)
@@ -361,11 +452,117 @@ def dashboard_data(selected_date: date) -> dict:
 
     recent = sorted(records, key=lambda item: item.checkin_at, reverse=True)[:8]
     return {
-        "total_employees": len(roster), "present": present_count, "absent": absent_count,
-        "late": late_count, "attendance_rate": attendance_rate, "is_workday": expected_workday,
-        "trend": trend_dates, "recent": recent, "selected_date": selected_date,
+        "total_employees": len(roster),
+        "present": present_count,
+        "absent": absent_count,
+        "late": late_count,
+        "trend": trend_dates,
+        "recent": recent,
+        "selected_date": selected_date,
         "records": records,
     }
+
+
+@app.route("/api/dashboard/active-employees")
+@roles_required("admin", "manager")
+def api_dashboard_active_employees():
+    """Return all currently active workforce members within the user's scope."""
+    active_users = (
+        team_query(User.query.filter(User.active.is_(True)))
+        .order_by(User.full_name.asc())
+        .all()
+    )
+    employees = []
+    for u in active_users:
+        employees.append({
+            "id": u.id,
+            "employee_id": u.employee_id,
+            "full_name": u.full_name,
+            "initials": u.initials,
+            "department": u.department,
+            "job_title": u.job_title or "Employee",
+            "shift_timing": u.shift_timing or "10:00 AM - 07:00 PM",
+            "role": u.role,
+            "status": "Active",
+        })
+    return jsonify(ok=True, count=len(employees), employees=employees)
+
+
+@app.route("/api/dashboard/present-employees")
+@roles_required("admin", "manager")
+def api_dashboard_present_employees():
+    """Return employees who have valid attendance for the selected dashboard date."""
+    today = now_ist().date()
+    target_date = parse_date(request.args.get("date"), today) or today
+    records = attendance_for_dashboard(target_date)
+    sorted_records = sorted(records, key=lambda r: r.checkin_at, reverse=True)
+
+    result = []
+    for r in sorted_records:
+        result.append({
+            "id": r.id,
+            "user_id": r.user_id,
+            "employee_id": r.user.employee_id,
+            "full_name": r.user.full_name,
+            "initials": r.user.initials,
+            "department": r.user.department,
+            "shift_timing": r.user.shift_timing or "10:00 AM - 07:00 PM",
+            "checkin_time": r.checkin_at.strftime("%I:%M %p"),
+            "break_display": r.break_display,
+            "break_in_progress": r.break_in_progress,
+            "checkout_time": r.checkout_at.strftime("%I:%M %p") if r.checkout_at else None,
+            "duration": r.duration_display,
+            "status": r.status,
+            "status_label": r.status_label,
+            "is_grace_period": r.is_grace_period,
+            "exception_granted": r.exception_granted,
+            "marked_by_admin": r.marked_by_admin,
+            "shift_completed": bool(r.checkout_at),
+        })
+    return jsonify(
+        ok=True,
+        date=target_date.isoformat(),
+        formatted_date=target_date.strftime("%d %b %Y"),
+        count=len(result),
+        records=result,
+    )
+
+
+@app.route("/api/dashboard/late-employees")
+@roles_required("admin", "manager")
+def api_dashboard_late_employees():
+    """Return employees who arrived late on the selected dashboard date."""
+    today = now_ist().date()
+    target_date = parse_date(request.args.get("date"), today) or today
+    records = attendance_for_dashboard(target_date)
+    late_records = [r for r in records if r.status == "Late"]
+    sorted_records = sorted(late_records, key=lambda r: r.checkin_at, reverse=True)
+
+    result = []
+    for r in sorted_records:
+        shift_start, late_after, _ = r.shift_times
+        shift_start_dt = datetime.combine(r.attendance_date, shift_start)
+        mins_late = max(1, int((r.checkin_at - shift_start_dt).total_seconds() // 60))
+        result.append({
+            "id": r.id,
+            "user_id": r.user_id,
+            "employee_id": r.user.employee_id,
+            "full_name": r.user.full_name,
+            "initials": r.user.initials,
+            "department": r.user.department,
+            "shift_timing": r.user.shift_timing or "10:00 AM - 07:00 PM",
+            "shift_start": shift_start.strftime("%I:%M %p"),
+            "checkin_time": r.checkin_at.strftime("%I:%M %p"),
+            "lateness_display": f"{mins_late} mins late",
+            "status": r.status,
+        })
+    return jsonify(
+        ok=True,
+        date=target_date.isoformat(),
+        formatted_date=target_date.strftime("%d %b %Y"),
+        count=len(result),
+        records=result,
+    )
 
 
 @app.route("/")
@@ -452,6 +649,57 @@ def _find_candidate_for_login(identifier: str) -> tuple[User | None, bool]:
     return None, False
 
 
+class LoginRateLimiter:
+    """Thread-safe in-memory rate limiter for authentication attempts."""
+    def __init__(self, max_attempts: int = 5, window_seconds: int = 300, lockout_seconds: int = 300):
+        self.max_attempts = max_attempts
+        self.window_seconds = window_seconds
+        self.lockout_seconds = lockout_seconds
+        self._lock = threading.Lock()
+        self._attempts: dict[str, list[float]] = {}
+        self._lockouts: dict[str, float] = {}
+
+    def _cleanup(self, now: float) -> None:
+        cutoff = now - max(self.window_seconds, self.lockout_seconds) * 2
+        for key in list(self._attempts.keys()):
+            self._attempts[key] = [t for t in self._attempts[key] if t > cutoff]
+            if not self._attempts[key]:
+                del self._attempts[key]
+        for key, until in list(self._lockouts.items()):
+            if until < now:
+                del self._lockouts[key]
+
+    def is_locked(self, key: str) -> tuple[bool, int]:
+        now = pytime.time()
+        with self._lock:
+            self._cleanup(now)
+            lockout_until = self._lockouts.get(key)
+            if lockout_until and lockout_until > now:
+                return True, int(math.ceil(lockout_until - now))
+            return False, 0
+
+    def record_failure(self, key: str) -> tuple[bool, int]:
+        now = pytime.time()
+        with self._lock:
+            self._cleanup(now)
+            times = self._attempts.setdefault(key, [])
+            times.append(now)
+            recent = [t for t in times if t > now - self.window_seconds]
+            self._attempts[key] = recent
+            if len(recent) >= self.max_attempts:
+                self._lockouts[key] = now + self.lockout_seconds
+                return True, self.lockout_seconds
+            return False, 0
+
+    def record_success(self, key: str) -> None:
+        with self._lock:
+            self._attempts.pop(key, None)
+            self._lockouts.pop(key, None)
+
+
+login_rate_limiter = LoginRateLimiter(max_attempts=5, window_seconds=300, lockout_seconds=300)
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     """Universal login portal for all workforce members: employees, managers, and administrators."""
@@ -460,13 +708,29 @@ def login():
     if request.method == "POST":
         identifier = (request.form.get("identifier") or request.form.get("email") or "").strip()
         password = request.form.get("password", "")
+
+        client_ip = (request.remote_addr or request.headers.get("X-Forwarded-For", "127.0.0.1")).split(",")[0].strip()
+        rate_key = f"{client_ip}:{identifier.lower()}"
+
+        if not current_app.config.get("TESTING"):
+            is_locked, remaining = login_rate_limiter.is_locked(rate_key)
+            if is_locked:
+                flash(f"Too many failed login attempts. Please wait {remaining} seconds before trying again.", "danger")
+                return render_template("login.html"), 429
+
         candidate, ambiguous = _find_candidate_for_login(identifier)
 
         if ambiguous:
             flash("Multiple active accounts matched that name or number. Please use your exact mobile number, email, or login ID.", "danger")
         elif candidate and candidate.check_password(password):
+            login_rate_limiter.record_success(rate_key)
             return _complete_login(candidate)
         else:
+            if not current_app.config.get("TESTING"):
+                locked_now, lockout_sec = login_rate_limiter.record_failure(rate_key)
+                if locked_now:
+                    flash(f"Too many failed login attempts. Account temporarily locked for {lockout_sec // 60} minutes.", "danger")
+                    return render_template("login.html"), 429
             flash("Invalid credentials or account is inactive. Please verify your details.", "danger")
     return render_template("login.html")
 
@@ -479,12 +743,49 @@ def employee_login():
     return redirect(url_for("login"))
 
 
-@app.post("/logout")
-@login_required
+@app.route("/logout", methods=["GET", "POST"])
 def logout():
-    logout_user()
+    if current_user.is_authenticated:
+        logout_user()
+    from flask import session
+    session.clear()
     flash("You have been signed out.", "success")
-    return redirect(url_for("login"))
+    response = make_response(redirect(url_for("login")))
+    session_cookie = app.config.get("SESSION_COOKIE_NAME", "session")
+    remember_cookie = app.config.get("REMEMBER_COOKIE_NAME", "remember_token")
+    response.delete_cookie(session_cookie, path="/")
+    response.delete_cookie(remember_cookie, path="/")
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+
+@app.route("/download-apk")
+@app.route("/apk")
+def download_apk():
+    """Allows workforce employees to download the latest Android APK directly over Wi-Fi without USB cables."""
+    apk_candidates = []
+    custom_apk_path = os.environ.get("APK_PATH")
+    if custom_apk_path:
+        apk_candidates.append(Path(custom_apk_path))
+    apk_candidates.extend([
+        BASE_DIR / "Balaji_Workforce.apk",
+        BASE_DIR / "static" / "downloads" / "Balaji_Workforce.apk",
+        BASE_DIR / "balaji-workforce-android" / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk",
+        BASE_DIR.parent / "Balaji_Workforce.apk",
+        BASE_DIR.parent / "balaji-workforce-android" / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk",
+    ])
+    for apk_path in apk_candidates:
+        if apk_path.is_file():
+            return send_file(
+                apk_path,
+                as_attachment=True,
+                download_name="Balaji_Workforce.apk",
+                mimetype="application/vnd.android.package-archive"
+            )
+    return abort(404, description="Balaji_Workforce.apk is not available on the server.")
+
 
 
 @app.route("/dashboard")
@@ -516,6 +817,8 @@ def dashboard():
 @app.route("/attendance")
 @login_required
 def attendance_page():
+    if current_user.role == "admin":
+        return redirect(url_for("dashboard"))
     today_record = Attendance.query.filter_by(user_id=current_user.id, attendance_date=now_ist().date()).first()
     history = Attendance.query.filter_by(user_id=current_user.id).order_by(Attendance.attendance_date.desc()).limit(30).all()
     fence = configured_geofence()
@@ -532,7 +835,7 @@ def attendance_page():
     )
 
 
-def parse_coordinates(payload: dict) -> tuple[float, float] | None:
+def parse_coordinates(payload: dict) -> tuple[float, float, float | None] | None:
     try:
         latitude = float(payload.get("latitude"))
         longitude = float(payload.get("longitude"))
@@ -542,7 +845,18 @@ def parse_coordinates(payload: dict) -> tuple[float, float] | None:
         return None
     if not -90 <= latitude <= 90 or not -180 <= longitude <= 180:
         return None
-    return latitude, longitude
+
+    accuracy = None
+    if "accuracy" in payload and payload.get("accuracy") is not None:
+        try:
+            acc_val = float(payload.get("accuracy"))
+            if math.isfinite(acc_val) and acc_val >= 0:
+                accuracy = acc_val
+            else:
+                return None
+        except (TypeError, ValueError):
+            return None
+    return latitude, longitude, accuracy
 
 
 def configured_geofence() -> tuple[float, float, float] | None:
@@ -572,7 +886,7 @@ def distance_between_meters(lat1: float, lon1: float, lat2: float, lon2: float) 
     return 2 * earth_radius_m * math.asin(math.sqrt(a))
 
 
-def geofence_error(coordinates: tuple[float, float]):
+def geofence_error(coordinates: tuple[float, float, float | None]):
     """Return (distance, error_response); an error_response is a Flask (body, status) pair."""
     fence = configured_geofence()
     if fence is None:
@@ -581,7 +895,18 @@ def geofence_error(coordinates: tuple[float, float]):
             message="Factory geofencing is not configured. Contact the administrator before recording attendance."
         ), 503)
     factory_lat, factory_lon, radius = fence
-    distance = distance_between_meters(coordinates[0], coordinates[1], factory_lat, factory_lon)
+    lat, lon, accuracy = coordinates
+
+    max_acc = current_app.config.get("GEOFENCE_MAX_ACCURACY_METERS")
+    if accuracy is not None and max_acc is not None and accuracy > max_acc:
+        return None, (jsonify(
+            ok=False,
+            message=f"Reported GPS accuracy is too imprecise (±{round(accuracy)}m). Accuracy within {round(max_acc)}m is required. Move to an open area and try again.",
+            accuracy_meters=round(accuracy),
+            max_accuracy_meters=round(max_acc),
+        ), 400)
+
+    distance = distance_between_meters(lat, lon, factory_lat, factory_lon)
     if distance > radius:
         return distance, (jsonify(
             ok=False,
@@ -609,14 +934,21 @@ def check_in():
         if existing.checkout_at is None:
             return jsonify(ok=False, message="You are already checked in for today."), 409
         return jsonify(ok=False, message="A completed attendance record already exists for today."), 409
-    latitude, longitude = coordinates
-    record = Attendance(user_id=current_user.id, attendance_date=work_date, checkin_at=now,
-                        checkin_latitude=latitude, checkin_longitude=longitude)
+    latitude, longitude, accuracy = coordinates
+    record = Attendance(
+        user_id=current_user.id,
+        attendance_date=work_date,
+        checkin_at=now,
+        checkin_latitude=latitude,
+        checkin_longitude=longitude,
+        checkin_accuracy=accuracy,
+    )
     db.session.add(record)
     try:
         db.session.commit()
-    except Exception:
+    except Exception as exc:
         db.session.rollback()
+        app.logger.error(f"Failed to commit check-in for user {current_user.id}: {exc}")
         return jsonify(ok=False, message="Attendance could not be saved. Please try again."), 500
     return jsonify(ok=True, message=f"Check-in recorded at {now.strftime('%I:%M %p')}.",
                     checkin_at=now.strftime("%I:%M %p"), status=record.status,
@@ -639,9 +971,19 @@ def check_out():
         return jsonify(ok=False, message="Check in before checking out."), 409
     if record.checkout_at:
         return jsonify(ok=False, message="You have already checked out today."), 409
+    latitude, longitude, accuracy = coordinates
+    if record.break_in_progress:
+        record.break_end_at = now
     record.checkout_at = now
-    record.checkout_latitude, record.checkout_longitude = coordinates
-    db.session.commit()
+    record.checkout_latitude = latitude
+    record.checkout_longitude = longitude
+    record.checkout_accuracy = accuracy
+    try:
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        app.logger.error(f"Failed to commit check-out for user {current_user.id}: {exc}")
+        return jsonify(ok=False, message="Check-out could not be saved. Please try again."), 500
     return jsonify(ok=True, message=f"Check-out recorded at {now.strftime('%I:%M %p')}.",
                     checkout_at=now.strftime("%I:%M %p"),
                     distance_meters=round(distance) if distance is not None else None), 200
@@ -660,7 +1002,12 @@ def break_start():
         return jsonify(ok=False, message="A break is already in progress."), 409
     record.break_start_at = now
     record.break_end_at = None
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        app.logger.error(f"Failed to start break for user {current_user.id}: {exc}")
+        return jsonify(ok=False, message="Could not update break status. Please try again."), 500
     return jsonify(
         ok=True,
         message=f"1-hour break started at {now.strftime('%I:%M %p')}.",
@@ -678,7 +1025,12 @@ def break_end():
     if not record.break_start_at or record.break_end_at is not None:
         return jsonify(ok=False, message="No active break in progress to resume from."), 409
     record.break_end_at = now
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        app.logger.error(f"Failed to end break for user {current_user.id}: {exc}")
+        return jsonify(ok=False, message="Could not resume shift. Please try again."), 500
     mins = max(1, int((now - record.break_start_at).total_seconds() // 60))
     return jsonify(
         ok=True,
@@ -693,9 +1045,11 @@ def grant_attendance_exception(record_id: int):
     record = db.session.get(Attendance, record_id)
     if not record:
         abort(404)
+    if current_user.role == "manager" and record.user.department != current_user.department:
+        abort(403)
     record.exception_granted = True
     db.session.commit()
-    flash(f"15-minute late exception granted for {record.user.full_name}.", "success")
+    flash(f"Admin help applied: Late exception granted for {record.user.full_name}.", "success")
     return redirect(request.referrer or url_for("records"))
 
 
@@ -724,6 +1078,8 @@ def manual_mark_attendance():
     if not candidate:
         flash("Candidate employee record not found.", "danger")
         return redirect(url_for("records"))
+    if current_user.role == "manager" and candidate.department != current_user.department:
+        abort(403)
 
     target_date = parse_date(date_str, now_ist().date()) or now_ist().date()
 
@@ -814,6 +1170,8 @@ def quick_checkout(record_id: int):
     record = db.session.get(Attendance, record_id)
     if not record:
         abort(404)
+    if current_user.role == "manager" and record.user.department != current_user.department:
+        abort(403)
     fence = configured_geofence()
     lat = fence[0] if fence else 12.9716
     lon = fence[1] if fence else 77.5946
@@ -1017,7 +1375,7 @@ def employee_new():
                     "success",
                 )
             return redirect(url_for("employees"))
-    return render_template("employee_form.html", employee=None)
+    return render_template("employee_form.html", employee=None, recent_attendance=[], today=now_ist().date())
 
 
 @app.route("/employees/<int:user_id>/edit", methods=["GET", "POST"])
@@ -1044,7 +1402,114 @@ def employee_edit(user_id: int):
             db.session.commit()
             flash(f"Employee {employee.employee_id} was updated.", "success")
             return redirect(url_for("employees"))
-    return render_template("employee_form.html", employee=employee)
+    recent_attendance = (
+        Attendance.query.filter_by(user_id=employee.id)
+        .order_by(Attendance.attendance_date.desc(), Attendance.checkin_at.desc())
+        .limit(7)
+        .all()
+    )
+    return render_template(
+        "employee_form.html",
+        employee=employee,
+        recent_attendance=recent_attendance,
+        today=now_ist().date(),
+    )
+
+
+@app.post("/employees/<int:user_id>/resolve-issue")
+@roles_required("admin")
+def resolve_employee_issue(user_id: int):
+    """Resolve an employee attendance issue/grievance directly from their profile."""
+    candidate = db.session.get(User, user_id)
+    if not candidate:
+        abort(404)
+
+    date_str = request.form.get("attendance_date", "").strip()
+    checkin_time_str = request.form.get("checkin_time", "").strip()
+    checkout_time_str = request.form.get("checkout_time", "").strip()
+    include_break = request.form.get("include_break") in {"1", "true", "on", "yes"}
+    grant_exception = request.form.get("grant_exception") in {"1", "true", "on", "yes"}
+    issue_reason = request.form.get("issue_reason", "").strip()
+    custom_note = request.form.get("admin_note", "").strip()
+
+    admin_note = custom_note or issue_reason or "Resolved by admin (phone broken / switched off / device issue)"
+    target_date = parse_date(date_str, now_ist().date()) or now_ist().date()
+
+    try:
+        if checkin_time_str:
+            parts = [int(p) for p in checkin_time_str.split(":")[:2]]
+            cin_time = time(parts[0], parts[1])
+        else:
+            cin_time = time(10, 0)
+    except Exception:
+        cin_time = time(10, 0)
+    checkin_dt = datetime.combine(target_date, cin_time)
+
+    checkout_dt = None
+    if checkout_time_str:
+        try:
+            parts = [int(p) for p in checkout_time_str.split(":")[:2]]
+            cout_time = time(parts[0], parts[1])
+            checkout_dt = datetime.combine(target_date, cout_time)
+        except Exception:
+            checkout_dt = None
+
+    break_start_dt = None
+    break_end_dt = None
+    if include_break:
+        b_start_str = request.form.get("break_start_time", "13:00").strip()
+        b_end_str = request.form.get("break_end_time", "14:00").strip()
+        try:
+            sp = [int(p) for p in b_start_str.split(":")[:2]]
+            break_start_dt = datetime.combine(target_date, time(sp[0], sp[1]))
+        except Exception:
+            break_start_dt = datetime.combine(target_date, time(13, 0))
+        try:
+            ep = [int(p) for p in b_end_str.split(":")[:2]]
+            break_end_dt = datetime.combine(target_date, time(ep[0], ep[1]))
+        except Exception:
+            break_end_dt = datetime.combine(target_date, time(14, 0))
+
+    fence = configured_geofence()
+    lat = fence[0] if fence else 12.9716
+    lon = fence[1] if fence else 77.5946
+
+    record = Attendance.query.filter_by(user_id=candidate.id, attendance_date=target_date).first()
+    if record:
+        record.checkin_at = checkin_dt
+        if checkout_dt:
+            record.checkout_at = checkout_dt
+            record.checkout_latitude = lat
+            record.checkout_longitude = lon
+        if include_break:
+            record.break_start_at = break_start_dt
+            record.break_end_at = break_end_dt
+        if grant_exception:
+            record.exception_granted = True
+        record.marked_by_admin = True
+        record.admin_note = admin_note
+    else:
+        
+        record = Attendance(
+            user_id=candidate.id,
+            attendance_date=target_date,
+            checkin_at=checkin_dt,
+            checkout_at=checkout_dt,
+            checkin_latitude=lat,
+            checkin_longitude=lon,
+            checkout_latitude=lat if checkout_dt else None,
+            checkout_longitude=lon if checkout_dt else None,
+            break_start_at=break_start_dt,
+            break_end_at=break_end_dt,
+            exception_granted=grant_exception,
+            marked_by_admin=True,
+            admin_note=admin_note,
+        )
+        db.session.add(record)
+
+    db.session.commit()
+    flash(f"Attendance grievance resolved for {candidate.full_name} ({target_date.strftime('%d %b %Y')}). Reason logged: {admin_note}", "success")
+    return redirect(url_for("employee_edit", user_id=candidate.id))
 
 
 @app.post("/employees/<int:user_id>/deactivate")
@@ -1447,10 +1912,85 @@ def bad_request(error):
     return render_template("errors/400.html", message=message), 400
 
 
-with app.app_context():
-    db.create_all()
+@app.errorhandler(500)
+def internal_server_error(error):
+    app.logger.error(f"Internal server error: {error}", exc_info=True)
+    return render_template("errors/500.html"), 500
+
+
+@app.route("/health")
+@app.route("/healthz")
+def health_check():
+    """Uptime health check probe for load balancers and deployment monitoring."""
+    try:
+        db.session.execute(db.text("SELECT 1"))
+        db_ok = True
+    except Exception as exc:
+        app.logger.error(f"Health check database ping failed: {exc}")
+        db_ok = False
+    status_code = 200 if db_ok else 503
+    return jsonify(
+        status="healthy" if db_ok else "unhealthy",
+        database="connected" if db_ok else "disconnected",
+        timestamp=now_ist().isoformat(),
+        version="1.0.0",
+    ), status_code
+
+
+@app.after_request
+def set_security_headers(response):
+    """Enforce standard HTTP security headers for production security compliance."""
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(self)"
+
+    # Strict-Transport-Security only if connection is genuinely secure (HTTPS)
+    if request.is_secure:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+
+    # Prevent caching for authenticated sessions, protected views, login/logout, or API responses
+    # Static assets under /static/ remain cacheable for speed, but dynamic HTML and API responses are never cached
+    is_protected_or_session = (
+        not request.path.startswith("/static/")
+        and (
+            current_user.is_authenticated
+            or request.path in ("/login", "/logout", "/employee-login", "/dashboard", "/attendance", "/records", "/employees", "/reports")
+            or request.path.startswith("/api/")
+            or request.path.startswith("/employees/")
+            or request.path.startswith("/reports/")
+            or request.endpoint in ("login", "logout", "dashboard", "attendance_page", "records", "employees", "reports", "daily_owner_report")
+        )
+    )
+    if is_protected_or_session:
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+
+    if not current_app.config.get("TESTING"):
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "
+            "font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net; "
+            "img-src 'self' data: https://*.google.com https://*.google.co.in https://maps.gstatic.com; "
+            "connect-src 'self'; "
+            "frame-ancestors 'self';"
+        )
+    return response
+
 
 if __name__ == "__main__":
+    host = os.environ.get("HOST", "0.0.0.0")
     port = int(os.environ.get("PORT", "5000"))
-    host = os.environ.get("HOST", "127.0.0.1")
+    if env_name == "production":
+        print(
+            "WARNING: Running with Flask built-in server in production mode.\n"
+            "For production deployments, use a production WSGI server instead:\n"
+            "  - Linux / Cloud:  gunicorn --workers=2 --threads=4 --bind=0.0.0.0:$PORT wsgi:app\n"
+            "  - Windows Server: python wsgi.py (Waitress)"
+        )
+    else:
+        print(f"Starting development server on http://{host}:{port} (Accessible on local Wi-Fi)")
     app.run(host=host, port=port, debug=os.environ.get("FLASK_DEBUG") == "1")
+

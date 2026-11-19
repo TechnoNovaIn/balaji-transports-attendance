@@ -1,13 +1,45 @@
+# Virtual environments
 venv/
 .venv/
+env/
+
+# Python cache & compiled files
 __pycache__/
 *.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Testing & coverage
 .pytest_cache/
-.env
-instance/*.sqlite3
-instance/*.db
 .coverage
-README.md
+htmlcov/
+
+# Environment files
 .env
-.env.example
-readme.md
+.env.local
+.env.*.local
+
+# SQLite databases & journals
+instance/*.sqlite3
+instance/*.sqlite3-journal
+instance/*.sqlite3-wal
+instance/*.sqlite3-shm
+instance/*.db
+
+# Backups & nested workspaces
+backups/
+balaji-workforce/
+
+# Binaries & executables
+*.apk
+*.aab
+*.exe
+
+# IDE & OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log

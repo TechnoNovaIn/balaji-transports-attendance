@@ -6,111 +6,204 @@
   <div>
     <div class="eyebrow"><span></span> PEOPLE DIRECTORY</div>
     <h1>{{ 'Edit employee' if employee else 'Add employee' }}<span class="heading-period">.</span></h1>
-    <p>{{ 'Update employee information and access permissions.' if employee else 'Create a new employee account for the workforce.' }}</p>
+    <p>{{ 'Update employee information, permissions, or resolve attendance issues.' if employee else 'Create a new employee account for the workforce.' }}</p>
   </div>
+  {% if employee %}
+  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    {% if current_user.role == 'admin' %}
+    <a href="{{ url_for('records') }}?employee={{ employee.id }}" class="btn btn-outline"><i class="bi bi-clock-history"></i> Attendance records</a>
+    {% endif %}
+    <a href="{{ url_for('employees') }}" class="btn btn-outline"><i class="bi bi-arrow-left"></i> Back to employees</a>
+  </div>
+  {% else %}
+  <a href="{{ url_for('employees') }}" class="btn btn-outline"><i class="bi bi-arrow-left"></i> Back to employees</a>
+  {% endif %}
 </div>
-<div class="form-page-grid">
+<div class="form-page-single">
   <section class="panel form-panel">
-    <form method="post">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <div class="form-section-heading">
-        <span class="form-section-icon"><i class="bi bi-person-vcard"></i></span>
+      <form method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-section-heading">
+          <span class="form-section-icon"><i class="bi bi-person-vcard"></i></span>
+          <div>
+            <h2>Employee information</h2>
+            <p>Full name, department, access role, and password are required. Employee ID is generated automatically, and job title is optional. Employees use phone number instead of email.</p>
+          </div>
+        </div>
+        {% set selected_department = request.form.get('department', employee.department if employee else '') %}
+        {% set selected_role = request.form.get('role', employee.role if employee else '') %}
+        {% set current_shift = request.form.get('shift_timing', employee.shift_timing if employee else '10:00 AM - 07:00 PM') %}
+        <div class="form-grid">
+          <div class="form-field">
+            <label for="employee_id">Employee ID <span class="table-secondary">({{ 'Current ID' if employee else 'Automatically generated' }})</span></label>
+            <input id="employee_id" name="employee_id" maxlength="24"
+                   value="{{ request.form.get('employee_id', (employee.employee_id if employee else '(Auto-generated on save)')) }}"
+                   readonly class="input-readonly">
+            <small>{{ 'Employee ID is permanent and managed automatically.' if employee else 'The system automatically generates a unique employee ID.' }}</small>
+          </div>
+          <div class="form-field">
+            <label for="full_name">Full name *</label>
+            <input id="full_name" name="full_name" required maxlength="120"
+                   value="{{ request.form.get('full_name', employee.full_name if employee else '') }}"
+                   placeholder="Employee full name" autocomplete="name">
+            <small>Employees can sign in with this name; each active employee must have a unique full name.</small>
+          </div>
+          <div class="form-field" id="phone_field_wrapper">
+            <label for="phone">Phone number <span id="phone_req_mark">*</span></label>
+            <input id="phone" name="phone" type="tel" maxlength="20"
+                   value="{{ request.form.get('phone', employee.phone if employee else '') }}"
+                   placeholder="e.g. 9876543210" autocomplete="tel">
+            <small id="phone_help">Used instead of email for employees to sign in.</small>
+          </div>
+          <div class="form-field" id="email_field_wrapper">
+            <label for="email">Work email <span id="email_req_mark">(required for Admin/Manager)</span></label>
+            <input id="email" name="email" type="email"
+                   value="{{ request.form.get('email', (employee.email if employee and not employee.email.endswith('@no-email.invalid') else '')) }}"
+                   placeholder="name@company.com" autocomplete="email">
+            <small id="email_help">Required for Admin and Manager accounts to sign in.</small>
+          </div>
+          <div class="form-field">
+            <label for="shift_timing">Shift timing *</label>
+            <select id="shift_timing" name="shift_timing" required>
+              <option value="10:00 AM - 07:00 PM" {% if current_shift == '10:00 AM - 07:00 PM' or not current_shift %}selected{% endif %}>10:00 AM - 07:00 PM (Standard Shift)</option>
+              <option value="09:00 AM - 06:00 PM" {% if current_shift == '09:00 AM - 06:00 PM' %}selected{% endif %}>09:00 AM - 06:00 PM (Morning Shift)</option>
+              <option value="08:00 AM - 05:00 PM" {% if current_shift == '08:00 AM - 05:00 PM' %}selected{% endif %}>08:00 AM - 05:00 PM (Early Shift)</option>
+              <option value="02:00 PM - 11:00 PM" {% if current_shift == '02:00 PM - 11:00 PM' %}selected{% endif %}>02:00 PM - 11:00 PM (Evening Shift)</option>
+              <option value="10:00 PM - 06:00 AM" {% if current_shift == '10:00 PM - 06:00 AM' %}selected{% endif %}>10:00 PM - 06:00 AM (Night Shift)</option>
+            </select>
+            <small>Working shift hours assigned to this employee.</small>
+          </div>
+          <div class="form-field">
+            <label for="department">Department *</label>
+            <select id="department" name="department" required>
+              <option value="" disabled {% if not selected_department %}selected{% endif %}>Select department</option>
+              {% for dep in ['Tally', 'AI', 'Accounts', 'Billing', 'Finance', 'Writer', 'Tyre Department', 'Inventory'] %}
+              <option value="{{ dep }}" {% if selected_department == dep %}selected{% endif %}>{{ dep }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-field">
+            <label for="job_title">Job title <span class="table-secondary">(optional)</span></label>
+            <input id="job_title" name="job_title" maxlength="80"
+                   value="{{ request.form.get('job_title', employee.job_title if employee else '') }}"
+                   placeholder="e.g. Fleet Coordinator (optional)">
+            <small>Optional position or role title.</small>
+          </div>
+          <div class="form-field">
+            <label for="role">Access role *</label>
+            <select id="role" name="role" required>
+              <option value="" disabled {% if not selected_role %}selected{% endif %}>Select access role</option>
+              {% for role in ['employee', 'manager', 'admin'] %}
+              <option value="{{ role }}" {% if selected_role == role %}selected{% endif %}>{{ role|title }}</option>
+              {% endfor %}
+            </select>
+            <small>Roles determine which modules this user can access.</small>
+          </div>
+          <div class="form-field">
+            <label for="password">{{ 'New password' if employee else 'Temporary password *' }}</label>
+            <input id="password" name="password" type="password" minlength="8"
+                   {% if not employee %}required{% endif %}
+                   placeholder="At least 8 characters" autocomplete="new-password">
+            <small>{% if employee %}Leave blank to keep the existing password.{% else %}At least 8 characters. Share securely with the employee.{% endif %}</small>
+          </div>
+        </div>
+        <div class="form-actions">
+          <a href="{{ url_for('employees') }}" class="btn btn-outline">Cancel</a>
+          <button type="submit" class="btn btn-primary"><i class="bi bi-check2"></i> {{ 'Save changes' if employee else 'Create employee' }}</button>
+        </div>
+      </form>
+    </section>
+
+    {% if employee and current_user.role == 'admin' %}
+    {# ── Grievance / Attendance Issue Resolution ── #}
+    <section class="panel form-panel" id="grievance-section">
+      <div class="form-section-heading" style="margin-bottom:18px">
+        <span class="form-section-icon" style="background:#fff5e8;color:#c98b22"><i class="bi bi-exclamation-triangle"></i></span>
         <div>
-          <h2>Employee information</h2>
-          <p>Full name, department, access role, and password are required. Employee ID is generated automatically, and job title is optional. Employees use phone number instead of email.</p>
+          <h2>Resolve Attendance Issue</h2>
+          <p>Employee grievance? Phone was off, broken, or they forgot it? Record or correct attendance directly here.</p>
         </div>
       </div>
-      {% set selected_department = request.form.get('department', employee.department if employee else '') %}
-      {% set selected_role = request.form.get('role', employee.role if employee else '') %}
-      {% set current_shift = request.form.get('shift_timing', employee.shift_timing if employee else '10:00 AM - 07:00 PM') %}
-      <div class="form-grid">
-        <div class="form-field">
-          <label for="employee_id">Employee ID <span class="table-secondary">({{ 'Current ID' if employee else 'Automatically generated' }})</span></label>
-          <input id="employee_id" name="employee_id" maxlength="24"
-                 value="{{ request.form.get('employee_id', (employee.employee_id if employee else '(Auto-generated on save)')) }}"
-                 readonly class="input-readonly">
-          <small>{{ 'Employee ID is permanent and managed automatically.' if employee else 'The system automatically generates a unique employee ID.' }}</small>
-        </div>
-        <div class="form-field">
-          <label for="full_name">Full name *</label>
-          <input id="full_name" name="full_name" required maxlength="120"
-                 value="{{ request.form.get('full_name', employee.full_name if employee else '') }}"
-                 placeholder="Employee full name" autocomplete="name">
-          <small>Employees can sign in with this name; each active employee must have a unique full name.</small>
-        </div>
-        <div class="form-field" id="phone_field_wrapper">
-          <label for="phone">Phone number <span id="phone_req_mark">*</span></label>
-          <input id="phone" name="phone" type="tel" maxlength="20"
-                 value="{{ request.form.get('phone', employee.phone if employee else '') }}"
-                 placeholder="e.g. 9876543210" autocomplete="tel">
-          <small id="phone_help">Used instead of email for employees to sign in.</small>
-        </div>
-        <div class="form-field" id="email_field_wrapper">
-          <label for="email">Work email <span id="email_req_mark">(required for Admin/Manager)</span></label>
-          <input id="email" name="email" type="email"
-                 value="{{ request.form.get('email', (employee.email if employee and not employee.email.endswith('@no-email.invalid') else '')) }}"
-                 placeholder="name@company.com" autocomplete="email">
-          <small id="email_help">Required for Admin and Manager accounts to sign in.</small>
-        </div>
-        <div class="form-field">
-          <label for="shift_timing">Shift timing *</label>
-          <select id="shift_timing" name="shift_timing" required>
-            <option value="10:00 AM - 07:00 PM" {% if current_shift == '10:00 AM - 07:00 PM' or not current_shift %}selected{% endif %}>10:00 AM - 07:00 PM (Standard Shift)</option>
-            <option value="09:00 AM - 06:00 PM" {% if current_shift == '09:00 AM - 06:00 PM' %}selected{% endif %}>09:00 AM - 06:00 PM (Morning Shift)</option>
-            <option value="08:00 AM - 05:00 PM" {% if current_shift == '08:00 AM - 05:00 PM' %}selected{% endif %}>08:00 AM - 05:00 PM (Early Shift)</option>
-            <option value="02:00 PM - 11:00 PM" {% if current_shift == '02:00 PM - 11:00 PM' %}selected{% endif %}>02:00 PM - 11:00 PM (Evening Shift)</option>
-            <option value="10:00 PM - 06:00 AM" {% if current_shift == '10:00 PM - 06:00 AM' %}selected{% endif %}>10:00 PM - 06:00 AM (Night Shift)</option>
-          </select>
-          <small>Working shift hours assigned to this employee.</small>
-        </div>
-        <div class="form-field">
-          <label for="department">Department *</label>
-          <select id="department" name="department" required>
-            <option value="" disabled {% if not selected_department %}selected{% endif %}>Select department</option>
-            {% for dep in ['Tally', 'AI', 'Accounts', 'Billing', 'Finance', 'Writer', 'Tyre Department', 'Inventory'] %}
-            <option value="{{ dep }}" {% if selected_department == dep %}selected{% endif %}>{{ dep }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="form-field">
-          <label for="job_title">Job title <span class="table-secondary">(optional)</span></label>
-          <input id="job_title" name="job_title" maxlength="80"
-                 value="{{ request.form.get('job_title', employee.job_title if employee else '') }}"
-                 placeholder="e.g. Fleet Coordinator (optional)">
-          <small>Optional position or role title.</small>
-        </div>
-        <div class="form-field">
-          <label for="role">Access role *</label>
-          <select id="role" name="role" required>
-            <option value="" disabled {% if not selected_role %}selected{% endif %}>Select access role</option>
-            {% for role in ['employee', 'manager', 'admin'] %}
-            <option value="{{ role }}" {% if selected_role == role %}selected{% endif %}>{{ role|title }}</option>
-            {% endfor %}
-          </select>
-          <small>Roles determine which modules this user can access.</small>
-        </div>
-        <div class="form-field">
-          <label for="password">{{ 'New password' if employee else 'Temporary password *' }}</label>
-          <input id="password" name="password" type="password" minlength="8"
-                 {% if not employee %}required{% endif %}
-                 placeholder="At least 8 characters" autocomplete="new-password">
-          <small>{% if employee %}Leave blank to keep the existing password.{% else %}At least 8 characters. Share securely with the employee.{% endif %}</small>
+
+      {# Recent attendance quick view #}
+      {% if recent_attendance %}
+      <div style="margin-bottom:18px">
+        <div style="font-size:10px;font-weight:700;color:#48566e;margin-bottom:8px;letter-spacing:.3px">RECENT ATTENDANCE (LAST 7 DAYS)</div>
+        <div style="display:flex;flex-direction:column;gap:4px">
+          {% for row in recent_attendance %}
+          <div style="display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid #edf0f5;border-radius:8px;background:#fafbfd">
+            <span style="font-size:10px;font-weight:700;color:#34425d;min-width:88px">{{ row.attendance_date.strftime('%d %b %Y') }}</span>
+            <span style="font-size:9px;color:#8691a5">{{ row.attendance_date.strftime('%A') }}</span>
+            <span class="badge badge-{{ row.status|lower }}" style="margin-left:auto"><span></span>{{ row.status }}</span>
+            {% if row.marked_by_admin %}
+            <span style="font-size:9px;color:#3b5bdb;font-weight:700"><i class="bi bi-wrench-adjustable"></i> Admin</span>
+            {% endif %}
+            {% if row.is_grace_period %}
+            <span style="font-size:9px;color:#2b8a3e;font-weight:700"><i class="bi bi-stopwatch"></i> 15m Extra Buffer</span>
+            {% elif row.exception_granted %}
+            <span style="font-size:9px;color:#2b8a3e;font-weight:700"><i class="bi bi-check-circle"></i> Admin Help</span>
+            {% endif %}
+            <span style="font-size:9px;color:#8691a5">In: {{ row.checkin_at.strftime('%I:%M %p') }}</span>
+            <span style="font-size:9px;color:#8691a5">Out: {{ row.checkout_at.strftime('%I:%M %p') if row.checkout_at else '—' }}</span>
+            {% if row.status == 'Late' and not row.exception_granted %}
+            <form method="post" action="{{ url_for('grant_attendance_exception', record_id=row.id) }}" style="display:inline;margin-left:4px">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="btn btn-outline btn-xs" style="padding:2px 8px;font-size:10px" title="Help employee: Excuse lateness and mark Present"><i class="bi bi-shield-check"></i> Admin Help</button>
+            </form>
+            {% endif %}
+          </div>
+          {% endfor %}
         </div>
       </div>
-      <div class="form-actions">
-        <a href="{{ url_for('employees') }}" class="btn btn-outline">Cancel</a>
-        <button type="submit" class="btn btn-primary"><i class="bi bi-check2"></i> {{ 'Save changes' if employee else 'Create employee' }}</button>
-      </div>
-    </form>
-  </section>
-  <aside class="panel permission-guide">
-    <span class="guide-icon"><i class="bi bi-shield-lock"></i></span>
-    <h3>Access roles</h3>
-    <div class="guide-item"><span class="role-pill role-admin">Admin</span><p>Manages accounts, attendance data, and reports.</p></div>
-    <div class="guide-item"><span class="role-pill role-manager">Manager</span><p>Views employee and attendance data within their department.</p></div>
-    <div class="guide-item"><span class="role-pill role-employee">Employee</span><p>Records check-in/out and views personal attendance only.</p></div>
-    <div class="guide-note"><i class="bi bi-info-circle"></i> Access restrictions are enforced on the server, not only in the interface.</div>
-  </aside>
+      {% endif %}
+
+      <form method="post" action="{{ url_for('resolve_employee_issue', user_id=employee.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px 15px;margin-bottom:14px">
+          <div class="form-field">
+            <label>Attendance Date *</label>
+            <input type="date" name="attendance_date" value="{{ today.isoformat() }}" required>
+          </div>
+          <div class="form-field">
+            <label>Issue / Reason *</label>
+            <select name="issue_reason" id="issueReasonSel" onchange="toggleCustomNote(this.value)">
+              <option value="Phone switched off / dead battery">Phone switched off / dead battery</option>
+              <option value="Phone broken / damaged device">Phone broken / damaged device</option>
+              <option value="Technical / network access issue">Technical / network access issue</option>
+              <option value="Forgot phone / device unavailable">Forgot phone / device unavailable</option>
+              <option value="Candidate verified by Admin">Candidate verified by Admin</option>
+              <option value="custom">Other / Custom reason...</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <label>Check-in Time *</label>
+            <input type="time" name="checkin_time" value="10:00" required>
+          </div>
+          <div class="form-field">
+            <label>Check-out Time <span class="table-secondary">(optional)</span></label>
+            <input type="time" name="checkout_time" value="19:00">
+          </div>
+        </div>
+        <div class="form-field" id="customNoteField" style="display:none;margin-bottom:14px">
+          <label>Custom Description</label>
+          <input type="text" name="admin_note" placeholder="Describe the issue the employee faced...">
+        </div>
+        <div style="background:#f8faff;border:1px solid #e2eaf8;border-radius:9px;padding:12px;margin-bottom:16px;display:flex;flex-direction:column;gap:8px">
+          <div style="font-size:11px;color:#495057;display:flex;align-items:center;gap:6px">
+            <i class="bi bi-info-circle" style="color:#2b8a3e"></i>
+            <span><strong>Automatic buffer:</strong> Employees automatically receive 15 minutes extra buffer after shift start.</span>
+          </div>
+          <label style="display:flex;align-items:center;gap:8px;font-size:11px;font-weight:600;color:#293650;cursor:pointer">
+            <input type="checkbox" name="grant_exception" value="1" checked style="accent-color:#4563eb">
+            <span>Admin Help: If employee is still late (after 15-min extra buffer), excuse lateness and mark as Present</span>
+          </label>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;justify-content:flex-end">
+          <button type="submit" class="btn btn-primary"><i class="bi bi-check2-circle"></i> Save & Resolve Issue</button>
+        </div>
+      </form>
+    </section>
+    {% endif %}
 </div>
 {% endblock %}
 {% block scripts %}
@@ -138,5 +231,11 @@
   roleField.addEventListener('change', syncRoleFields);
   syncRoleFields();
 })();
+
+function toggleCustomNote(val) {
+  const f = document.getElementById('customNoteField');
+  if (f) f.style.display = val === 'custom' ? 'block' : 'none';
+}
 </script>
 {% endblock %}
+

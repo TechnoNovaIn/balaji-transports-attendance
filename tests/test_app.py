@@ -1,6 +1,13 @@
 import os
+import sys
 import tempfile
 from datetime import datetime, time
+from pathlib import Path
+
+# Ensure project root is in sys.path when running tests directly with `python tests/test_app.py`
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 # Set the database URI before importing the global Flask app so tests never touch demo data.
 _TEST_DB = os.path.join(tempfile.gettempdir(), "balaji_workforce_test_suite.sqlite3")
@@ -736,3 +743,570 @@ def test_admin_candidate_wise_manual_attendance_and_break_resolution():
         checked_out_rec = db.session.get(Attendance, test_rec_id)
         assert checked_out_rec.checkout_at is not None
         assert checked_out_rec.marked_by_admin is True
+
+
+def test_resolve_employee_issue_from_profile_and_clean_records_page():
+    admin_client = app.test_client()
+    login(admin_client, "admin@test.local")
+    today = now_ist().date()
+
+    with app.app_context():
+        emp = User.query.filter_by(full_name="Employee One").first()
+        emp_id = emp.id
+
+    # 1. Employees list has clickable row for admin
+    emp_list_resp = admin_client.get("/employees")
+    assert emp_list_resp.status_code == 200
+    assert b"emp-row-clickable" in emp_list_resp.data
+    assert f'data-href="/employees/{emp_id}/edit"'.encode() in emp_list_resp.data
+
+    # 2. Employee profile page has grievance section
+    edit_page_resp = admin_client.get(f"/employees/{emp_id}/edit")
+    assert edit_page_resp.status_code == 200
+    assert b"Resolve Attendance Issue" in edit_page_resp.data
+    assert f'action="/employees/{emp_id}/resolve-issue"'.encode() in edit_page_resp.data
+
+    # 3. Admin submits grievance resolution from the employee's profile
+    resolve_resp = admin_client.post(
+        f"/employees/{emp_id}/resolve-issue",
+        data={
+            "attendance_date": today.isoformat(),
+            "checkin_time": "10:10",
+            "checkout_time": "19:00",
+            "include_break": "1",
+            "grant_exception": "1",
+            "issue_reason": "Phone broken / damaged device",
+            "admin_note": "",
+        },
+        follow_redirects=True,
+    )
+    assert resolve_resp.status_code == 200
+    assert b"Attendance grievance resolved" in resolve_resp.data
+
+    # Verify database state
+    with app.app_context():
+        record = Attendance.query.filter_by(user_id=emp_id, attendance_date=today).first()
+        assert record is not None
+        assert record.marked_by_admin is True
+        assert record.admin_note == "Phone broken / damaged device"
+        assert record.exception_granted is True
+        assert record.status == "Present"
+
+    # 4. Records page does not contain manual attendance modal or "Resolve Candidate Attendance" button
+    records_resp = admin_client.get("/records")
+    assert records_resp.status_code == 200
+    assert b"Resolve Candidate Attendance" not in records_resp.data
+    assert b'id="manualAttendanceModal"' not in records_resp.data
+    assert b"Admin Resolved" in records_resp.data
+
+
+def test_admin_overview_no_charts_and_no_my_attendance():
+    admin_client = app.test_client()
+    login(admin_client, "admin@test.local")
+
+    # 1. Admin overview page should NOT have charts (Attendance trend, Today's distribution, canvas)
+    dash_resp = admin_client.get("/dashboard")
+    assert dash_resp.status_code == 200
+    assert b"Attendance trend" not in dash_resp.data
+    assert b"Today's distribution" not in dash_resp.data
+    assert b"attendanceTrend" not in dash_resp.data
+    assert b"attendanceDistribution" not in dash_resp.data
+
+    # 2. KPI metrics and Recent attendance table ARE present
+    assert b"Active employees" in dash_resp.data
+    assert b"Recent attendance" in dash_resp.data
+
+    # 3. Sidebar for admin should NOT contain "My attendance"
+    assert b"My attendance" not in dash_resp.data
+
+    # 4. Accessing /attendance as admin redirects to /dashboard
+    att_resp = admin_client.get("/attendance", follow_redirects=False)
+    assert att_resp.status_code == 302
+    assert att_resp.location.endswith("/dashboard")
+
+
+def test_health_check_endpoints():
+    client = app.test_client()
+    for endpoint in ["/health", "/healthz"]:
+        resp = client.get(endpoint)
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["status"] == "healthy"
+        assert data["database"] == "connected"
+        assert "timestamp" in data
+
+
+def test_security_headers_enforced():
+    client = app.test_client()
+    resp = client.get("/login")
+    assert resp.status_code == 200
+    assert resp.headers.get("X-Content-Type-Options") == "nosniff"
+    assert resp.headers.get("X-Frame-Options") == "SAMEORIGIN"
+    assert resp.headers.get("Referrer-Policy") == "strict-origin-when-cross-origin"
+    assert "geolocation=(self)" in resp.headers.get("Permissions-Policy", "")
+
+
+def test_sqlite_foreign_key_constraints_enforced():
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+    with app.app_context():
+        # Attempt to insert attendance for non-existent user ID 99999
+        orphan = Attendance(
+            user_id=99999,
+            attendance_date=now_ist().date(),
+            checkin_at=now_ist(),
+            checkin_latitude=12.97,
+            checkin_longitude=77.59,
+        )
+        db.session.add(orphan)
+        with pytest.raises(IntegrityError):
+            db.session.commit()
+        db.session.rollback()
+
+
+def test_geofence_accuracy_policy():
+    client = app.test_client()
+    login(client, "Employee One")
+
+    # 1. Imprecise accuracy (> 500m) is rejected
+    bad_acc = client.post("/api/attendance/check-in", json={
+        "latitude": 12.9700,
+        "longitude": 77.5900,
+        "accuracy": 850.0
+    })
+    assert bad_acc.status_code == 400
+    assert b"accuracy is too imprecise" in bad_acc.data.lower()
+
+    # 2. Negative or non-numeric accuracy is rejected
+    invalid_acc = client.post("/api/attendance/check-in", json={
+        "latitude": 12.9700,
+        "longitude": 77.5900,
+        "accuracy": -25.0
+    })
+    assert invalid_acc.status_code == 400
+
+    # 3. Valid accuracy (< 500m) within geofence is accepted
+    good_acc = client.post("/api/attendance/check-in", json={
+        "latitude": 12.9700,
+        "longitude": 77.5900,
+        "accuracy": 15.0
+    })
+    assert good_acc.status_code == 201
+
+
+def test_checkout_while_on_break_concludes_break_safely():
+    client = app.test_client()
+    login(client, "Employee One")
+
+    # Check in
+    client.post("/api/attendance/check-in", json={"latitude": 12.9700, "longitude": 77.5900})
+    # Start break
+    client.post("/api/attendance/break-start")
+    with app.app_context():
+        rec = Attendance.query.filter_by(user_id=get_user("employee@test.local").id, attendance_date=now_ist().date()).first()
+        assert rec.break_in_progress is True
+
+    # Checkout without explicit break-end should auto-close break cleanly
+    cout = client.post("/api/attendance/check-out", json={"latitude": 12.9700, "longitude": 77.5900})
+    assert cout.status_code == 200
+
+    with app.app_context():
+        rec = Attendance.query.filter_by(user_id=get_user("employee@test.local").id, attendance_date=now_ist().date()).first()
+        assert rec.checkout_at is not None
+        assert rec.break_start_at is not None
+        assert rec.break_end_at is not None
+        assert rec.break_in_progress is False
+
+
+def test_login_rate_limiter_logic():
+    from app import LoginRateLimiter
+    limiter = LoginRateLimiter(max_attempts=3, window_seconds=60, lockout_seconds=60)
+    key = "127.0.0.1:test_user"
+
+    is_locked, _ = limiter.is_locked(key)
+    assert not is_locked
+
+    # 1st failure
+    locked, _ = limiter.record_failure(key)
+    assert not locked
+
+    # 2nd failure
+    locked, _ = limiter.record_failure(key)
+    assert not locked
+
+    # 3rd failure locks the account
+    locked, rem = limiter.record_failure(key)
+    assert locked
+    assert rem > 0
+
+    is_locked, rem2 = limiter.is_locked(key)
+    assert is_locked
+    assert rem2 > 0
+
+    # Successful login resets the lockout
+    limiter.record_success(key)
+    is_locked, _ = limiter.is_locked(key)
+    assert not is_locked
+
+
+def test_records_page_has_compact_action_dropdown_and_no_standalone_admin_help_button():
+    admin_client = app.test_client()
+    login(admin_client, "admin@test.local")
+    today = now_ist().date()
+    with app.app_context():
+        employee = get_user("employee@test.local")
+        rec = Attendance.query.filter_by(user_id=employee.id, attendance_date=today).first()
+        if not rec:
+            db.session.add(Attendance(
+                user_id=employee.id,
+                attendance_date=today,
+                checkin_at=datetime.combine(today, time(10, 5)),
+                checkout_at=None,
+                checkin_latitude=12.97,
+                checkin_longitude=77.59,
+            ))
+            db.session.commit()
+
+    resp = admin_client.get("/records")
+    assert resp.status_code == 200
+
+    # Compact Manage Attendance dropdown is rendered
+    assert b"Manage Attendance" in resp.data
+    assert b"action-dropdown" in resp.data
+    assert b"action-menu" in resp.data
+
+    # Old standalone Admin Help button is no longer present as a separate button in Actions column
+    assert b'title="Help employee: Excuse lateness and mark Present"' not in resp.data
+
+
+def test_employee_edit_page_no_longer_has_access_roles_sidebar_and_form_expands():
+    admin_client = app.test_client()
+    login(admin_client, "admin@test.local")
+    with app.app_context():
+        emp = get_user("employee@test.local")
+        emp_id = emp.id
+
+    resp = admin_client.get(f"/employees/{emp_id}/edit")
+    assert resp.status_code == 200
+
+    # Verify Access Roles sidebar panel was removed
+    assert b"permission-guide" not in resp.data
+    assert b"Access Roles" not in resp.data
+    assert b"form-page-single" in resp.data
+
+    # Verify Access Role form field in main form remains fully functional
+    assert b'id="role"' in resp.data
+    assert b'name="role"' in resp.data
+
+    # Verify updating the employee retains role assignment functionality
+    post_resp = admin_client.post(
+        f"/employees/{emp_id}/edit",
+        data={
+            "full_name": emp.full_name,
+            "department": emp.department,
+            "shift_timing": emp.shift_timing,
+            "job_title": emp.job_title,
+            "phone": emp.phone,
+            "email": "",
+            "role": "manager",
+            "password": "",
+        },
+        follow_redirects=True,
+    )
+    # Manager requires email
+    assert post_resp.status_code == 200
+    assert b"A work email is required for Admin and Manager accounts" in post_resp.data
+
+    # With email provided, role update succeeds
+    post_ok = admin_client.post(
+        f"/employees/{emp_id}/edit",
+        data={
+            "full_name": emp.full_name,
+            "department": emp.department,
+            "shift_timing": emp.shift_timing,
+            "job_title": emp.job_title,
+            "phone": emp.phone,
+            "email": "emp.promoted@balajitransports.com",
+            "role": "manager",
+            "password": "",
+        },
+        follow_redirects=True,
+    )
+    assert post_ok.status_code == 200
+    with app.app_context():
+        updated_emp = db.session.get(User, emp_id)
+        assert updated_emp.role == "manager"
+        # Reset back to employee for test isolation
+        updated_emp.role = "employee"
+        updated_emp.email = f"{updated_emp.phone}@no-email.invalid"
+        db.session.commit()
+
+
+def test_dashboard_has_no_non_working_day_banner_or_attendance_rate_card():
+    admin_client = app.test_client()
+    login(admin_client, "admin@test.local")
+    resp = admin_client.get("/dashboard")
+    assert resp.status_code == 200
+
+    # Requirement 1: Non-working day banner removed
+    assert b"Non-working day" not in resp.data
+    assert b"Monday\xe2\x80\x93Friday working-week assumption" not in resp.data
+    assert b"Not counted on weekends" not in resp.data
+
+    # Requirement 2: Attendance rate card removed
+    assert b"Attendance rate" not in resp.data
+    assert b"kpi-rate" not in resp.data
+
+    # Requirement 6: Interactive cards present
+    assert b'data-modal-type="active-employees"' in resp.data
+    assert b'data-modal-type="present-employees"' in resp.data
+    assert b'data-modal-type="late-employees"' in resp.data
+    assert b'id="dashboardModal"' in resp.data
+
+
+def test_api_dashboard_active_employees_requires_roles_and_returns_active_only():
+    # 1. Unauthenticated redirects to login
+    client = app.test_client()
+    anon_resp = client.get("/api/dashboard/active-employees")
+    assert anon_resp.status_code == 302
+
+    # 2. Ordinary employee receives 403 Forbidden
+    login(client, "Employee One")
+    emp_resp = client.get("/api/dashboard/active-employees")
+    assert emp_resp.status_code == 403
+
+    # 3. Admin receives active employees list without deactivated ones
+    admin_client = app.test_client()
+    login(admin_client, "admin@test.local")
+    
+    # Deactivate one user to ensure it is excluded
+    with app.app_context():
+        deact = get_user("other@test.local")
+        deact.active = False
+        db.session.commit()
+
+    resp = admin_client.get("/api/dashboard/active-employees")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["count"] == len(data["employees"])
+    emp_names = [e["full_name"] for e in data["employees"]]
+    assert "Employee Two" not in emp_names
+    assert "Employee One" in emp_names
+
+    # Clean up deactivated user
+    with app.app_context():
+        deact = get_user("other@test.local")
+        deact.active = True
+        db.session.commit()
+
+
+def test_api_dashboard_present_and_late_employees_date_filtered():
+    admin_client = app.test_client()
+    login(admin_client, "admin@test.local")
+    today = now_ist().date()
+
+    with app.app_context():
+        emp = get_user("employee@test.local")
+        # Ensure employee has a late check-in (shift is 10:00 AM, checkin at 10:35 AM is late)
+        existing = Attendance.query.filter_by(user_id=emp.id, attendance_date=today).first()
+        if existing:
+            db.session.delete(existing)
+            db.session.commit()
+
+        rec = Attendance(
+            user_id=emp.id,
+            attendance_date=today,
+            checkin_at=datetime.combine(today, time(10, 35)),
+            checkout_at=datetime.combine(today, time(19, 5)),
+            checkin_latitude=12.97,
+            checkin_longitude=77.59,
+        )
+        db.session.add(rec)
+        db.session.commit()
+
+    # Present employees API
+    resp_present = admin_client.get(f"/api/dashboard/present-employees?date={today.isoformat()}")
+    assert resp_present.status_code == 200
+    pdata = resp_present.get_json()
+    assert pdata["ok"] is True
+    assert pdata["count"] >= 1
+    p_names = [r["full_name"] for r in pdata["records"]]
+    assert "Employee One" in p_names
+    emp_rec = next(r for r in pdata["records"] if r["full_name"] == "Employee One")
+    assert emp_rec["shift_completed"] is True
+    assert emp_rec["status"] == "Late"
+
+    # Late employees API
+    resp_late = admin_client.get(f"/api/dashboard/late-employees?date={today.isoformat()}")
+    assert resp_late.status_code == 200
+    ldata = resp_late.get_json()
+    assert ldata["ok"] is True
+    assert ldata["count"] >= 1
+    late_rec = next(r for r in ldata["records"] if r["full_name"] == "Employee One")
+    assert "mins late" in late_rec["lateness_display"]
+    assert late_rec["shift_start"] == "10:00 AM"
+
+
+def test_logout_invalidates_session_and_clears_cookies():
+    client = app.test_client()
+    login(client, "Employee One")
+    dash = client.get("/dashboard")
+    assert dash.status_code == 200
+    assert "no-store" in dash.headers.get("Cache-Control", "")
+
+    # Logout via POST
+    logout_resp = client.post("/logout", follow_redirects=False)
+    assert logout_resp.status_code == 302
+    assert logout_resp.location == "/login" or logout_resp.location.endswith("/login")
+    assert "no-store" in logout_resp.headers.get("Cache-Control", "")
+    assert "max-age=0" in logout_resp.headers.get("Cache-Control", "")
+
+    # Protected page now redirects to login
+    dash_after = client.get("/dashboard", follow_redirects=False)
+    assert dash_after.status_code == 302
+    assert "/login" in dash_after.location
+
+
+def test_logout_supports_get_and_clears_session():
+    client = app.test_client()
+    login(client, "Employee One")
+    # Logout via GET
+    logout_resp = client.get("/logout", follow_redirects=False)
+    assert logout_resp.status_code == 302
+    assert "/login" in logout_resp.location
+
+    # Re-accessing dashboard redirects to login
+    dash_after = client.get("/dashboard", follow_redirects=False)
+    assert dash_after.status_code == 302
+    assert "/login" in dash_after.location
+
+
+def test_sequential_employee_logins_are_strictly_isolated():
+    client = app.test_client()
+
+    # 1. Employee One logs in
+    login(client, "Employee One")
+    dash1 = client.get("/dashboard")
+    assert dash1.status_code == 200
+    assert b"Employee One" in dash1.data
+    assert b"Employee Two" not in dash1.data
+
+    # 2. Logout
+    client.post("/logout", follow_redirects=True)
+
+    # 3. Employee Two logs in
+    login(client, "Employee Two")
+    dash2 = client.get("/dashboard")
+    assert dash2.status_code == 200
+    assert b"Employee Two" in dash2.data
+    assert b"Employee One" not in dash2.data
+
+
+def test_manager_department_isolation_on_attendance_modifications():
+    """Verify managers cannot mark attendance, grant exceptions, or checkout employees from other departments."""
+    today = now_ist().date()
+    manager_client = app.test_client()
+    login(manager_client, "manager@test.local")  # Operations department
+
+    with app.app_context():
+        emp2 = User.query.filter_by(email="other@test.local").first()  # Fleet department
+        assert emp2.department == "Fleet"
+        emp2_id = emp2.id
+
+        # Create an attendance record for Employee Two
+        rec = Attendance(
+            user_id=emp2_id,
+            attendance_date=today,
+            checkin_at=datetime.combine(today, time(10, 30)),
+            checkin_latitude=12.9700,
+            checkin_longitude=77.5900,
+        )
+        db.session.add(rec)
+        db.session.commit()
+        rec_id = rec.id
+
+    # 1. Manager attempts manual-mark for employee in other department -> 403
+    resp_manual = manager_client.post(
+        "/attendance/manual-mark",
+        data={
+            "user_id": str(emp2_id),
+            "attendance_date": today.isoformat(),
+            "checkin_time": "10:00",
+            "checkout_time": "19:00",
+        },
+    )
+    assert resp_manual.status_code == 403
+
+    # 2. Manager attempts grant-exception for employee in other department -> 403
+    resp_grant = manager_client.post(f"/attendance/{rec_id}/grant-exception")
+    assert resp_grant.status_code == 403
+
+    # 3. Manager attempts quick-checkout for employee in other department -> 403
+    resp_cout = manager_client.post(f"/attendance/{rec_id}/quick-checkout")
+    assert resp_cout.status_code == 403
+
+
+def test_manager_can_modify_own_department_attendance():
+    """Verify managers can resolve attendance for employees within their own department."""
+    today = now_ist().date()
+    manager_client = app.test_client()
+    login(manager_client, "manager@test.local")  # Operations department
+
+    with app.app_context():
+        emp1 = User.query.filter_by(email="employee@test.local").first()  # Operations department
+        assert emp1.department == "Operations"
+        emp1_id = emp1.id
+
+    # Manager marks manual attendance for Employee One
+    resp = manager_client.post(
+        "/attendance/manual-mark",
+        data={
+            "user_id": str(emp1_id),
+            "attendance_date": today.isoformat(),
+            "checkin_time": "10:00",
+            "checkout_time": "19:00",
+            "admin_note": "Approved by Operations Manager",
+        },
+        follow_redirects=True,
+    )
+    assert resp.status_code == 200
+
+    with app.app_context():
+        rec = Attendance.query.filter_by(user_id=emp1_id, attendance_date=today).first()
+        assert rec is not None
+        assert rec.marked_by_admin is True
+        assert "Approved by Operations Manager" in rec.admin_note
+
+
+def test_employee_cannot_access_administrative_endpoints():
+    """Verify employees cannot access admin/manager-only routes."""
+    employee_client = app.test_client()
+    login(employee_client, "Employee One")
+
+    # Employee cannot access /employees
+    assert employee_client.get("/employees").status_code == 403
+
+    # Employee cannot access /reports
+    assert employee_client.get("/reports").status_code == 403
+    assert employee_client.get("/reports.csv").status_code == 403
+    assert employee_client.get("/reports.xlsx").status_code == 403
+    assert employee_client.get("/reports/daily").status_code == 403
+
+    # Employee cannot access employee creation or editing
+    assert employee_client.get("/employees/new").status_code == 403
+    assert employee_client.get("/employees/1/edit").status_code == 403
+
+    # Employee cannot manually mark attendance
+    assert employee_client.post("/attendance/manual-mark", data={}).status_code == 403
+
+
+if __name__ == "__main__":
+    import pytest
+    sys.exit(pytest.main(["-v", __file__]))
+
+
+
+
+
+

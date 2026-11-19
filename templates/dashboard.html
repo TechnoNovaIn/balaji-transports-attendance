@@ -43,9 +43,9 @@
       <div><span class="time-label"><i class="bi bi-box-arrow-left"></i> Check-out</span><strong>{{ record.checkout_at.strftime('%I:%M %p') if record.checkout_at else '— —' }}</strong><small>{% if record.checkout_at %}GPS captured{% else %}Not recorded yet{% endif %}</small></div>
     </div>
     {% if record.is_grace_period %}
-    <div class="notice-banner" style="margin-top:14px;background:#eef6fc;border-color:#d0e6f7"><i class="bi bi-shield-check" style="color:#2085d8"></i><div><strong style="color:#1d6fa5">15-minute arrival exception applied</strong><span>You arrived within the 15-minute buffer after shift start. Your attendance status is protected as Present.</span></div></div>
+    <div class="notice-banner" style="margin-top:14px;background:#eef6fc;border-color:#d0e6f7"><i class="bi bi-shield-check" style="color:#2085d8"></i><div><strong style="color:#1d6fa5">15-minute arrival exception applied</strong><span>You arrived within the automatic 15-minute extra buffer after shift start. Your attendance status is protected as Present.</span></div></div>
     {% elif record.exception_granted %}
-    <div class="notice-banner" style="margin-top:14px;background:#eef6fc;border-color:#d0e6f7"><i class="bi bi-shield-check" style="color:#2085d8"></i><div><strong style="color:#1d6fa5">Manager exception approved</strong><span>A 15-minute late exception was approved for this shift.</span></div></div>
+    <div class="notice-banner" style="margin-top:14px;background:#eef6fc;border-color:#d0e6f7"><i class="bi bi-shield-check" style="color:#2085d8"></i><div><strong style="color:#1d6fa5">Admin help approved</strong><span>Late arrival was excused by Admin. Your status is Present.</span></div></div>
     {% endif %}
     {% else %}
     <div class="attendance-empty">
@@ -58,7 +58,7 @@
       <p>Allow browser location access to securely record the time and coordinates of your attendance.</p>
     </div>
     {% endif %}
-    <div class="gps-notice"><i class="bi bi-shield-check"></i><div><strong>Location consent & buffer</strong><span>15-minute late exception is provided automatically. 1-hour break buffer is available during your shift.</span></div></div>
+    <div class="gps-notice"><i class="bi bi-shield-check"></i><div><strong>Location consent & buffer</strong><span>15-minute automatic extra buffer is provided. 1-hour break buffer is available during your shift.</span></div></div>
     <div id="attendanceMessage" class="attendance-message" role="status" aria-live="polite" hidden></div>
     <div class="attendance-actions">
       {% if not record %}
@@ -91,8 +91,10 @@
       <td>{{ row.duration_display }}</td>
       <td>
         <span class="badge badge-{{ row.status|lower }}"><span></span>{{ row.status }}</span>
-        {% if row.is_grace_period or row.exception_granted %}
-        <small style="display:block;color:#1e7e34;font-size:10px;font-weight:700;margin-top:3px"><i class="bi bi-shield-check"></i> 15m Exception</small>
+        {% if row.is_grace_period %}
+        <small style="display:block;color:#1e7e34;font-size:10px;font-weight:700;margin-top:3px"><i class="bi bi-shield-check"></i> 15m Extra Buffer</small>
+        {% elif row.exception_granted %}
+        <small style="display:block;color:#1e7e34;font-size:10px;font-weight:700;margin-top:3px"><i class="bi bi-shield-check"></i> Admin Help</small>
         {% endif %}
       </td>
       <td><span class="gps-state"><i class="bi bi-geo-alt-fill"></i> Captured</span></td>
@@ -110,22 +112,85 @@
   <div><div class="eyebrow"><span></span> {{ current_user.role|upper }} WORKSPACE</div><h1>Good {{ 'morning' if now.strftime('%H')|int < 12 else ('afternoon' if now.strftime('%H')|int < 17 else 'evening') }}, {{ current_user.full_name.split()[0] }}<span class="heading-period">.</span></h1><p>Here's what's happening with your workforce today.</p></div>
   <form method="get" class="date-picker-form"><label for="dashboard-date"><i class="bi bi-calendar3"></i> Date</label><input id="dashboard-date" type="date" name="date" value="{{ data.selected_date.isoformat() }}" max="{{ today.isoformat() }}"><button type="submit" class="btn btn-outline btn-sm">Apply</button></form>
 </div>
-{% if not data.is_workday %}<div class="notice-banner"><i class="bi bi-info-circle"></i><div><strong>Non-working day</strong><span>Absence and attendance-rate metrics use a Monday–Friday working-week assumption.</span></div></div>{% endif %}
 <div class="kpi-grid">
-  <article class="kpi-card"><div class="kpi-top"><span class="kpi-label">Active employees</span><span class="kpi-icon icon-indigo"><i class="bi bi-people"></i></span></div><div class="kpi-value">{{ data.total_employees }}</div><div class="kpi-foot"><span class="kpi-dot dot-indigo"></span>{{ current_user.department if current_user.role == 'manager' else 'Across the organization' }}</div></article>
-  <article class="kpi-card"><div class="kpi-top"><span class="kpi-label">Present</span><span class="kpi-icon icon-green"><i class="bi bi-person-check"></i></span></div><div class="kpi-value">{{ data.present }}<small>{% if data.total_employees %}/ {{ data.total_employees }}{% endif %}</small></div><div class="kpi-foot"><span class="status-dot status-present"></span>Checked in on selected date</div></article>
-  <article class="kpi-card"><div class="kpi-top"><span class="kpi-label">Absent</span><span class="kpi-icon icon-amber"><i class="bi bi-person-dash"></i></span></div><div class="kpi-value">{{ data.absent }}</div><div class="kpi-foot"><span class="status-dot status-absent"></span>{% if data.is_workday %}No valid check-in recorded{% else %}Not counted on weekends{% endif %}</div></article>
-  <article class="kpi-card"><div class="kpi-top"><span class="kpi-label">Late arrivals</span><span class="kpi-icon icon-rose"><i class="bi bi-clock-history"></i></span></div><div class="kpi-value">{{ data.late }}</div><div class="kpi-foot"><span class="status-dot status-late"></span>After 09:00 AM shift start</div></article>
-  <article class="kpi-card kpi-rate"><div class="kpi-top"><span class="kpi-label">Attendance rate</span><span class="kpi-icon icon-blue"><i class="bi bi-graph-up-arrow"></i></span></div><div class="kpi-value">{{ data.attendance_rate }}<small>%</small></div><div class="kpi-progress"><span style="width: {{ data.attendance_rate }}%"></span></div><div class="kpi-foot">Based on active employees scheduled today</div></article>
+  <article class="kpi-card kpi-card-clickable" tabindex="0" role="button" data-modal-type="active-employees" aria-label="View list of active employees (count: {{ data.total_employees }})">
+    <div class="kpi-top">
+      <span class="kpi-label">Active employees</span>
+      <span class="kpi-icon icon-indigo"><i class="bi bi-people"></i></span>
+    </div>
+    <div class="kpi-value">{{ data.total_employees }}</div>
+    <div class="kpi-foot">
+      <span class="kpi-dot dot-indigo"></span>{{ current_user.department if current_user.role == 'manager' else 'Across the organization' }}
+      <span class="kpi-click-badge"><i class="bi bi-arrow-up-right"></i> View</span>
+    </div>
+  </article>
+
+  <article class="kpi-card kpi-card-clickable" tabindex="0" role="button" data-modal-type="present-employees" aria-label="View present employees on {{ data.selected_date.strftime('%d %b %Y') }} (count: {{ data.present }})">
+    <div class="kpi-top">
+      <span class="kpi-label">Present</span>
+      <span class="kpi-icon icon-green"><i class="bi bi-person-check"></i></span>
+    </div>
+    <div class="kpi-value">{{ data.present }}<small>{% if data.total_employees %}/ {{ data.total_employees }}{% endif %}</small></div>
+    <div class="kpi-foot">
+      <span class="status-dot status-present"></span>Checked in on selected date
+      <span class="kpi-click-badge"><i class="bi bi-arrow-up-right"></i> View</span>
+    </div>
+  </article>
+
+  <article class="kpi-card">
+    <div class="kpi-top">
+      <span class="kpi-label">Absent</span>
+      <span class="kpi-icon icon-amber"><i class="bi bi-person-dash"></i></span>
+    </div>
+    <div class="kpi-value">{{ data.absent }}</div>
+    <div class="kpi-foot">
+      <span class="status-dot status-absent"></span>No valid check-in recorded
+    </div>
+  </article>
+
+  <article class="kpi-card kpi-card-clickable" tabindex="0" role="button" data-modal-type="late-employees" aria-label="View late arrivals on {{ data.selected_date.strftime('%d %b %Y') }} (count: {{ data.late }})">
+    <div class="kpi-top">
+      <span class="kpi-label">Late arrivals</span>
+      <span class="kpi-icon icon-rose"><i class="bi bi-clock-history"></i></span>
+    </div>
+    <div class="kpi-value">{{ data.late }}</div>
+    <div class="kpi-foot">
+      <span class="status-dot status-late"></span>After assigned shift buffer
+      <span class="kpi-click-badge"><i class="bi bi-arrow-up-right"></i> View</span>
+    </div>
+  </article>
 </div>
-<div class="dashboard-grid">
-  <section class="panel trend-panel"><div class="panel-header"><div><h2>Attendance trend</h2><p>Check-ins over the last seven days</p></div><span class="panel-tag"><span class="legend-dot"></span> Present</span></div><div class="chart-wrap"><canvas id="attendanceTrend" aria-label="Attendance trend chart" role="img"></canvas><div id="trendFallback" class="chart-fallback" hidden>Chart library unavailable. Your attendance records are still available below.</div></div></section>
-  <section class="panel distribution-panel"><div class="panel-header"><div><h2>Today's distribution</h2><p>Attendance status overview</p></div><span class="subtle-icon"><i class="bi bi-pie-chart"></i></span></div><div class="donut-wrap"><canvas id="attendanceDistribution" aria-label="Attendance distribution chart" role="img"></canvas><div class="donut-center"><strong>{{ data.present }}</strong><span>Present</span></div></div><div class="distribution-legend"><div><span class="legend-dot legend-green"></span><span>Present</span><strong>{{ data.present }}</strong></div><div><span class="legend-dot legend-amber"></span><span>Absent</span><strong>{{ data.absent }}</strong></div><div><span class="legend-dot legend-rose"></span><span>Late arrivals</span><strong>{{ data.late }}</strong></div></div></section>
+
+{# Dashboard Card Details Modal #}
+<div id="dashboardModal" class="dashboard-modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" hidden>
+  <div class="modal-backdrop" id="modalBackdrop"></div>
+  <div class="modal-dialog">
+    <div class="modal-header">
+      <div class="modal-title-wrap">
+        <span class="modal-header-icon" id="modalIcon"><i class="bi bi-people"></i></span>
+        <div>
+          <h2 id="modalTitle">Employee Details</h2>
+          <p id="modalSubtitle" class="modal-subtitle">Showing details for selected view</p>
+        </div>
+      </div>
+      <button type="button" class="modal-close" id="modalCloseBtn" aria-label="Close dialog">
+        <i class="bi bi-x-lg"></i>
+      </button>
+    </div>
+    <div class="modal-body" id="modalBody">
+      <div class="modal-loading"><span class="button-spinner"></span> Loading employee details...</div>
+    </div>
+    <div class="modal-footer">
+      <span id="modalRecordCount">Showing records</span>
+      <button type="button" class="btn btn-outline btn-sm" id="modalFooterClose">Close</button>
+    </div>
+  </div>
 </div>
+
 <section class="panel records-panel"><div class="panel-header panel-header-records"><div><h2>Recent attendance</h2><p>Latest check-ins for {{ data.selected_date.strftime('%d %B %Y') }}</p></div><a class="btn btn-outline btn-sm" href="{{ url_for('records') }}">View all records <i class="bi bi-arrow-up-right"></i></a></div>
   {% if data.recent %}<div class="table-scroll"><table class="data-table"><thead><tr><th>Employee</th><th>Check-in</th><th>Break (1h)</th><th>Check-out</th><th>Status</th><th>GPS capture</th></tr></thead><tbody>
-  {% for row in data.recent %}<tr><td><div class="person-cell"><span class="avatar avatar-soft">{{ row.user.initials }}</span><span><strong>{{ row.user.full_name }}</strong><small>{% if row.user.employee_id.startswith('SYS-') %}Login: {{ row.user.employee_id }}{% else %}ID: {{ row.user.employee_id }}{% endif %} · {{ row.user.department }}</small></span></div></td><td><span class="table-primary">{{ row.checkin_at.strftime('%I:%M %p') }}</span><small class="table-secondary">{{ row.attendance_date.strftime('%d %b %Y') }}</small></td><td><span class="table-primary">{{ row.break_display }}</span></td><td>{% if row.checkout_at %}<span class="table-primary">{{ row.checkout_at.strftime('%I:%M %p') }}</span>{% else %}<span class="table-secondary">In progress</span>{% endif %}</td><td><span class="badge badge-{{ row.status|lower }}"><span></span>{{ row.status }}</span>{% if row.is_grace_period or row.exception_granted %}<small style="display:block;color:#1e7e34;font-size:10px;font-weight:700;margin-top:2px"><i class="bi bi-shield-check"></i> 15m Exception</small>{% endif %}</td><td><span class="gps-state"><i class="bi bi-geo-alt-fill"></i> Captured</span></td></tr>{% endfor %}
-  </tbody></table></div>{% else %}<div class="empty-state"><span class="empty-icon"><i class="bi bi-calendar2-check"></i></span><strong>No attendance records yet</strong><p>Records for the selected date will appear here after a successful GPS check-in.</p><a href="{{ url_for('attendance_page') }}" class="btn btn-primary btn-sm">Go to my attendance <i class="bi bi-arrow-right"></i></a></div>{% endif %}
+  {% for row in data.recent %}<tr><td><div class="person-cell"><span class="avatar avatar-soft">{{ row.user.initials }}</span><span><strong>{{ row.user.full_name }}</strong><small>{% if row.user.employee_id.startswith('SYS-') %}Login: {{ row.user.employee_id }}{% else %}ID: {{ row.user.employee_id }}{% endif %} · {{ row.user.department }}</small></span></div></td><td><span class="table-primary">{{ row.checkin_at.strftime('%I:%M %p') }}</span><small class="table-secondary">{{ row.attendance_date.strftime('%d %b %Y') }}</small></td><td><span class="table-primary">{{ row.break_display }}</span></td><td>{% if row.checkout_at %}<span class="table-primary">{{ row.checkout_at.strftime('%I:%M %p') }}</span>{% else %}<span class="table-secondary">In progress</span>{% endif %}</td><td><span class="badge badge-{{ row.status|lower }}"><span></span>{{ row.status }}</span>{% if row.is_grace_period %}<small style="display:block;color:#1e7e34;font-size:10px;font-weight:700;margin-top:2px"><i class="bi bi-shield-check"></i> 15m Extra Buffer</small>{% elif row.exception_granted %}<small style="display:block;color:#1e7e34;font-size:10px;font-weight:700;margin-top:2px"><i class="bi bi-shield-check"></i> Admin Help</small>{% endif %}</td><td><span class="gps-state"><i class="bi bi-geo-alt-fill"></i> Captured</span></td></tr>{% endfor %}
+  </tbody></table></div>{% else %}<div class="empty-state"><span class="empty-icon"><i class="bi bi-calendar2-check"></i></span><strong>No attendance records yet</strong><p>Records for the selected date will appear here after a successful GPS check-in.</p><a href="{{ url_for('records') }}" class="btn btn-primary btn-sm"><i class="bi bi-calendar3"></i> View attendance records</a></div>{% endif %}
 </section>
 {% endif %}
 {% endblock %}
@@ -134,10 +199,284 @@
 {% if is_employee %}
 <script src="{{ url_for('static', filename='js/attendance.js') }}"></script>
 {% else %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script>
-window.dashboardData = {{ {'labels': data.trend|map(attribute='label')|list, 'values': data.trend|map(attribute='present')|list, 'present': data.present, 'absent': data.absent, 'late': data.late}|tojson }};
+(() => {
+  const modal = document.getElementById('dashboardModal');
+  const modalBackdrop = document.getElementById('modalBackdrop');
+  const modalCloseBtn = document.getElementById('modalCloseBtn');
+  const modalFooterClose = document.getElementById('modalFooterClose');
+  const modalTitle = document.getElementById('modalTitle');
+  const modalSubtitle = document.getElementById('modalSubtitle');
+  const modalIcon = document.getElementById('modalIcon');
+  const modalBody = document.getElementById('modalBody');
+  const modalRecordCount = document.getElementById('modalRecordCount');
+  const dateInput = document.getElementById('dashboard-date');
+  let lastFocusedElement = null;
+
+  const openModal = () => {
+    if (!modal) return;
+    modal.removeAttribute('hidden');
+    document.body.style.overflow = 'hidden';
+    if (modalCloseBtn) modalCloseBtn.focus();
+  };
+
+  const closeModal = () => {
+    if (!modal) return;
+    modal.setAttribute('hidden', '');
+    document.body.style.overflow = '';
+    if (lastFocusedElement) {
+      lastFocusedElement.focus();
+      lastFocusedElement = null;
+    }
+  };
+
+  [modalCloseBtn, modalFooterClose, modalBackdrop].forEach(el => {
+    if (el) el.addEventListener('click', closeModal);
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal && !modal.hasAttribute('hidden')) {
+      closeModal();
+    }
+  });
+
+  const escapeHtml = (str) => {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  };
+
+  const renderActiveEmployees = (data) => {
+    modalIcon.className = 'modal-header-icon icon-indigo';
+    modalIcon.innerHTML = '<i class="bi bi-people"></i>';
+    modalTitle.textContent = 'Active Employees';
+    modalSubtitle.textContent = 'Currently active workforce accounts in your scope';
+    modalRecordCount.textContent = `Total active: ${data.count}`;
+
+    if (!data.employees || data.employees.length === 0) {
+      modalBody.innerHTML = `
+        <div class="empty-state compact-empty">
+          <span class="empty-icon"><i class="bi bi-people"></i></span>
+          <strong>No active employees found</strong>
+          <p>No active workforce accounts are currently registered under your scope.</p>
+        </div>
+      `;
+      return;
+    }
+
+    let rows = data.employees.map(emp => `
+      <tr>
+        <td>
+          <div class="person-cell">
+            <span class="avatar avatar-soft">${escapeHtml(emp.initials)}</span>
+            <span>
+              <strong>${escapeHtml(emp.full_name)}</strong>
+              <small>${escapeHtml(emp.employee_id.startsWith('SYS-') ? 'Login: ' + emp.employee_id : 'ID: ' + emp.employee_id)} · ${escapeHtml(emp.department)}</small>
+            </span>
+          </div>
+        </td>
+        <td><span class="table-primary">${escapeHtml(emp.job_title)}</span><small class="table-secondary">${escapeHtml(emp.role.toUpperCase())}</small></td>
+        <td><span class="shift-pill"><i class="bi bi-clock"></i> ${escapeHtml(emp.shift_timing)}</span></td>
+        <td><span class="active-state"><span></span> Active</span></td>
+      </tr>
+    `).join('');
+
+    modalBody.innerHTML = `
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Employee</th>
+              <th>Job Title / Role</th>
+              <th>Assigned Shift</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    `;
+  };
+
+  const renderPresentEmployees = (data) => {
+    modalIcon.className = 'modal-header-icon icon-green';
+    modalIcon.innerHTML = '<i class="bi bi-person-check"></i>';
+    modalTitle.textContent = 'Present Employees';
+    modalSubtitle.textContent = `Employees with verified check-ins on ${data.formatted_date || data.date}`;
+    modalRecordCount.textContent = `Total present: ${data.count}`;
+
+    if (!data.records || data.records.length === 0) {
+      modalBody.innerHTML = `
+        <div class="empty-state compact-empty">
+          <span class="empty-icon"><i class="bi bi-calendar-x"></i></span>
+          <strong>No present employees</strong>
+          <p>No employees recorded attendance for ${escapeHtml(data.formatted_date || data.date)}.</p>
+        </div>
+      `;
+      return;
+    }
+
+    let rows = data.records.map(rec => {
+      let stateBadge = rec.shift_completed 
+        ? `<span class="badge badge-present"><i class="bi bi-check-circle"></i> Completed</span>` 
+        : `<span class="badge" style="background:#eef4ff;color:#3b5bdb"><i class="bi bi-clock"></i> In progress</span>`;
+
+      let note = '';
+      if (rec.is_grace_period) {
+        note = `<small style="display:block;color:#1e7e34;font-size:10px;font-weight:700"><i class="bi bi-shield-check"></i> 15m Buffer</small>`;
+      } else if (rec.exception_granted) {
+        note = `<small style="display:block;color:#1e7e34;font-size:10px;font-weight:700"><i class="bi bi-shield-check"></i> Admin Help</small>`;
+      }
+
+      return `
+        <tr>
+          <td>
+            <div class="person-cell">
+              <span class="avatar avatar-soft">${escapeHtml(rec.initials)}</span>
+              <span>
+                <strong>${escapeHtml(rec.full_name)}</strong>
+                <small>${escapeHtml(rec.employee_id.startsWith('SYS-') ? 'Login: ' + rec.employee_id : 'ID: ' + rec.employee_id)} · ${escapeHtml(rec.department)}</small>
+              </span>
+            </div>
+          </td>
+          <td><span class="shift-pill"><i class="bi bi-clock"></i> ${escapeHtml(rec.shift_timing)}</span></td>
+          <td><span class="table-primary">${escapeHtml(rec.checkin_time)}</span></td>
+          <td><span class="table-primary">${escapeHtml(rec.break_display)}</span></td>
+          <td><span class="table-primary">${rec.checkout_time ? escapeHtml(rec.checkout_time) : '<span class="table-secondary">— —</span>'}</span></td>
+          <td>${stateBadge}${note}</td>
+        </tr>
+      `;
+    }).join('');
+
+    modalBody.innerHTML = `
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Employee</th>
+              <th>Assigned Shift</th>
+              <th>Check-in</th>
+              <th>1-hr Break</th>
+              <th>Check-out</th>
+              <th>Shift Status</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    `;
+  };
+
+  const renderLateEmployees = (data) => {
+    modalIcon.className = 'modal-header-icon icon-rose';
+    modalIcon.innerHTML = '<i class="bi bi-clock-history"></i>';
+    modalTitle.textContent = 'Late Arrivals';
+    modalSubtitle.textContent = `Arrivals after assigned shift buffer on ${data.formatted_date || data.date}`;
+    modalRecordCount.textContent = `Total late: ${data.count}`;
+
+    if (!data.records || data.records.length === 0) {
+      modalBody.innerHTML = `
+        <div class="empty-state compact-empty">
+          <span class="empty-icon"><i class="bi bi-check2-circle" style="color:#209b69"></i></span>
+          <strong>No late arrivals</strong>
+          <p>All employees with attendance on ${escapeHtml(data.formatted_date || data.date)} arrived on time!</p>
+        </div>
+      `;
+      return;
+    }
+
+    let rows = data.records.map(rec => `
+      <tr>
+        <td>
+          <div class="person-cell">
+            <span class="avatar avatar-soft">${escapeHtml(rec.initials)}</span>
+            <span>
+              <strong>${escapeHtml(rec.full_name)}</strong>
+              <small>${escapeHtml(rec.employee_id.startsWith('SYS-') ? 'Login: ' + rec.employee_id : 'ID: ' + rec.employee_id)} · ${escapeHtml(rec.department)}</small>
+            </span>
+          </div>
+        </td>
+        <td><span class="shift-pill"><i class="bi bi-clock"></i> ${escapeHtml(rec.shift_timing)}</span></td>
+        <td><span class="table-primary">${escapeHtml(rec.shift_start)}</span></td>
+        <td><span class="table-primary" style="color:#d95b6f">${escapeHtml(rec.checkin_time)}</span></td>
+        <td><span class="badge badge-late"><span></span> ${escapeHtml(rec.lateness_display)}</span></td>
+      </tr>
+    `).join('');
+
+    modalBody.innerHTML = `
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Employee</th>
+              <th>Assigned Shift</th>
+              <th>Shift Start</th>
+              <th>Actual Check-in</th>
+              <th>Calculated Lateness</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    `;
+  };
+
+  const loadCardDetails = (type) => {
+    const selectedDate = dateInput ? dateInput.value : '';
+    let url = '';
+    if (type === 'active-employees') {
+      url = '/api/dashboard/active-employees';
+    } else if (type === 'present-employees') {
+      url = `/api/dashboard/present-employees?date=${encodeURIComponent(selectedDate)}`;
+    } else if (type === 'late-employees') {
+      url = `/api/dashboard/late-employees?date=${encodeURIComponent(selectedDate)}`;
+    } else {
+      return;
+    }
+
+    openModal();
+    modalBody.innerHTML = `<div class="modal-loading"><span class="button-spinner"></span> Loading details...</div>`;
+
+    fetch(url)
+      .then(res => {
+        if (!res.ok) throw new Error('Failed to retrieve employee records');
+        return res.json();
+      })
+      .then(data => {
+        if (type === 'active-employees') renderActiveEmployees(data);
+        else if (type === 'present-employees') renderPresentEmployees(data);
+        else if (type === 'late-employees') renderLateEmployees(data);
+      })
+      .catch(err => {
+        modalBody.innerHTML = `
+          <div class="empty-state compact-empty">
+            <span class="empty-icon" style="color:#d95b6f"><i class="bi bi-exclamation-triangle"></i></span>
+            <strong>Unable to load employee details</strong>
+            <p>${escapeHtml(err.message || 'An error occurred while loading details.')}</p>
+          </div>
+        `;
+      });
+  };
+
+  document.querySelectorAll('.kpi-card-clickable').forEach(card => {
+    card.addEventListener('click', () => {
+      lastFocusedElement = card;
+      loadCardDetails(card.dataset.modalType);
+    });
+
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        lastFocusedElement = card;
+        loadCardDetails(card.dataset.modalType);
+      }
+    });
+  });
+})();
 </script>
-<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
 {% endif %}
 {% endblock %}

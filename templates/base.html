@@ -15,17 +15,23 @@
 <body>
 {% if current_user.is_authenticated %}
 <div class="app-shell">
+  <div class="sidebar-backdrop" id="sidebarBackdrop" aria-hidden="true"></div>
   <aside class="sidebar" id="sidebar">
-    <a class="brand" href="{{ url_for('dashboard') }}">
-      <span class="brand-mark"><i class="bi bi-boxes"></i></span>
-      <span class="brand-copy"><strong>Balaji<span>.</span></strong><small>TRANSPORTS</small></span>
-    </a>
+    <div class="sidebar-top">
+      <a class="brand" href="{{ url_for('dashboard') }}">
+        <span class="brand-mark"><i class="bi bi-boxes"></i></span>
+        <span class="brand-copy"><strong>Balaji<span>.</span></strong><small>TRANSPORTS</small></span>
+      </a>
+      <button class="sidebar-close-btn" id="sidebarCloseBtn" type="button" aria-label="Close sidebar"><i class="bi bi-x-lg"></i></button>
+    </div>
     <div class="sidebar-label">WORKSPACE</div>
     <nav class="side-nav" aria-label="Main navigation">
       {% if current_user.role in ['admin', 'manager'] %}
       <a class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}"><i class="bi bi-grid-1x2"></i><span>Overview</span></a>
       {% endif %}
+      {% if current_user.role != 'admin' %}
       <a class="nav-link {% if request.endpoint in ['attendance_page', 'dashboard'] and current_user.role == 'employee' %}active{% elif request.endpoint == 'attendance_page' %}active{% endif %}" href="{{ url_for('dashboard' if current_user.role == 'employee' else 'attendance_page') }}"><i class="bi bi-clock-history"></i><span>My attendance</span></a>
+      {% endif %}
       {% if current_user.role in ['admin', 'manager'] %}
       <a class="nav-link {% if request.endpoint == 'employees' %}active{% endif %}" href="{{ url_for('employees') }}"><i class="bi bi-people"></i><span>Employees</span></a>
       <a class="nav-link {% if request.endpoint == 'records' %}active{% endif %}" href="{{ url_for('records') }}"><i class="bi bi-calendar3"></i><span>Attendance records</span></a>
@@ -43,8 +49,12 @@
   </aside>
   <main class="main-area">
     <header class="topbar">
-      <button class="mobile-menu icon-button" id="mobileMenu" aria-label="Toggle navigation"><i class="bi bi-list"></i></button>
-      <div class="breadcrumb"><span>Workspace</span><i class="bi bi-chevron-right"></i><strong>{% block breadcrumb %}Overview{% endblock %}</strong></div>
+      <div class="topbar-left">
+        <button class="mobile-menu" id="mobileMenu" type="button" aria-label="Toggle navigation">
+          <i class="bi bi-list"></i>
+        </button>
+        <div class="breadcrumb"><span>Workspace</span><i class="bi bi-chevron-right"></i><strong>{% block breadcrumb %}Overview{% endblock %}</strong></div>
+      </div>
       <div class="topbar-right"><span class="secure-label"><i class="bi bi-shield-lock"></i> Secure session</span><span class="top-date"><i class="bi bi-calendar4"></i> {{ today.strftime('%a, %d %b %Y') }}</span><div class="avatar avatar-blue">{{ current_user.initials }}</div></div>
     </header>
     <section class="page-content">
@@ -55,6 +65,35 @@
       <footer class="page-footer"><span>© {{ today.year }} Balaji Transports</span><span>Attendance management <i class="bi bi-dot"></i> Prototype</span></footer>
     </section>
   </main>
+  <nav class="mobile-bottom-nav" aria-label="Quick mobile navigation">
+    {% if current_user.role in ['admin', 'manager'] %}
+    <a href="{{ url_for('dashboard') }}" class="bottom-nav-item {% if request.endpoint == 'dashboard' %}active{% endif %}">
+      <i class="bi bi-grid-1x2"></i>
+      <span>Overview</span>
+    </a>
+    <a href="{{ url_for('employees') }}" class="bottom-nav-item {% if request.endpoint == 'employees' %}active{% endif %}">
+      <i class="bi bi-people"></i>
+      <span>Staff</span>
+    </a>
+    <a href="{{ url_for('records') }}" class="bottom-nav-item {% if request.endpoint == 'records' %}active{% endif %}">
+      <i class="bi bi-calendar3"></i>
+      <span>Records</span>
+    </a>
+    <a href="{{ url_for('reports') }}" class="bottom-nav-item {% if request.endpoint in ['reports', 'reports_csv', 'reports_xlsx', 'daily_owner_report', 'daily_owner_report_csv'] %}active{% endif %}">
+      <i class="bi bi-file-earmark-bar-graph"></i>
+      <span>Reports</span>
+    </a>
+    {% else %}
+    <a href="{{ url_for('dashboard') }}" class="bottom-nav-item active">
+      <i class="bi bi-clock-history"></i>
+      <span>Attendance</span>
+    </a>
+    {% endif %}
+    <button type="button" class="bottom-nav-item bottom-nav-menu" id="bottomNavMenuBtn" aria-label="Open full menu">
+      <i class="bi bi-list"></i>
+      <span>Menu</span>
+    </button>
+  </nav>
 </div>
 {% else %}
 {% block public_content %}{% endblock %}
