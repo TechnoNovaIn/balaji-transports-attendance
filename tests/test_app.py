@@ -636,6 +636,81 @@ def test_break_buffer_start_end_and_display():
     assert b"Break (1h)" in resp.data
 
 
+def test_multiple_breaks_accumulate_total_time():
+    """Verify taking multiple breaks (e.g. 23m + 3m) accumulates to 26m total rather than overwriting."""
+    client = app.test_client()
+    login(client, "Employee One")
+    today = now_ist().date()
+    with app.app_context():
+        user = get_user("employee@test.local")
+        rec = Attendance.query.filter_by(user_id=user.id, attendance_date=today).first()
+        if not rec:
+            rec = Attendance(
+                user_id=user.id,
+                attendance_date=today,
+                checkin_at=datetime.combine(today, time(9, 30)),
+                checkin_latitude=12.9716,
+                checkin_longitude=77.5946,
+            )
+            db.session.add(rec)
+        else:
+            rec.checkin_at = datetime.combine(today, time(9, 30))
+            rec.checkout_at = None
+            rec.break_start_at = None
+            rec.break_end_at = None
+            rec.total_break_seconds = 0
+        db.session.commit()
+
+    # 1. First break: 23 minutes (12:00 PM to 12:23 PM)
+    with app.app_context():
+        user = get_user("employee@test.local")
+        rec = Attendance.query.filter_by(user_id=user.id, attendance_date=today).first()
+        b1_start = datetime.combine(today, time(12, 0))
+        b1_end = datetime.combine(today, time(12, 23))
+        rec.break_start_at = b1_start
+        rec.break_end_at = b1_end
+        rec.total_break_seconds = int((b1_end - b1_start).total_seconds())  # 23 * 60 = 1380
+        db.session.commit()
+
+    # 2. Second break: start break at 01:00 PM
+    with app.app_context():
+        user = get_user("employee@test.local")
+        rec = Attendance.query.filter_by(user_id=user.id, attendance_date=today).first()
+        b2_start = datetime.combine(today, time(13, 0))
+        rec.break_start_at = b2_start
+        rec.break_end_at = None
+        db.session.commit()
+
+    # Verify break in progress recognizes previous break
+    with app.app_context():
+        user = get_user("employee@test.local")
+        rec = Attendance.query.filter_by(user_id=user.id, attendance_date=today).first()
+        assert rec.break_in_progress is True
+        assert "23m taken earlier" in rec.break_display
+
+    # End second break at 01:03 PM (3 minutes later)
+    with app.app_context():
+        user = get_user("employee@test.local")
+        rec = Attendance.query.filter_by(user_id=user.id, attendance_date=today).first()
+        b2_end = datetime.combine(today, time(13, 3))
+        delta_sec = int((b2_end - rec.break_start_at).total_seconds())  # 180 seconds
+        rec.total_break_seconds += delta_sec
+        rec.break_end_at = b2_end
+        db.session.commit()
+
+    # Verify total accumulated break time is 26 minutes (1560s)
+    with app.app_context():
+        user = get_user("employee@test.local")
+        rec = Attendance.query.filter_by(user_id=user.id, attendance_date=today).first()
+        assert rec.total_break_seconds == 26 * 60
+        assert "26m total" in rec.break_display
+
+        # Test shift duration deduction with checkout at 06:30 PM (9 hours gross)
+        rec.checkout_at = datetime.combine(today, time(18, 30))
+        # Gross = 9 hours (540m). Net = 540m - 26m = 514m = 8h 34m
+        assert rec.duration_display == "8h 34m"
+
+
 def test_fifteen_minute_late_exception_buffer():
     today = now_ist().date()
     with app.app_context():
@@ -1146,6 +1221,15 @@ def test_api_dashboard_present_and_late_employees_date_filtered():
     late_rec = next(r for r in ldata["records"] if r["full_name"] == "Employee One")
     assert "mins late" in late_rec["lateness_display"]
     assert late_rec["shift_start"] == "10:00 AM"
+
+    # Absent employees API
+    resp_absent = admin_client.get(f"/api/dashboard/absent-employees?date={today.isoformat()}")
+    assert resp_absent.status_code == 200
+    adata = resp_absent.get_json()
+    assert adata["ok"] is True
+    # Employee One has check-in today, so must NOT be in absent list
+    absent_names = [e["full_name"] for e in adata["employees"]]
+    assert "Employee One" not in absent_names
 
 
 def test_logout_invalidates_session_and_clears_cookies():

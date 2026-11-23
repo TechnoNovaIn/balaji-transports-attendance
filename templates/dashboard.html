@@ -137,7 +137,7 @@
     </div>
   </article>
 
-  <article class="kpi-card">
+  <article class="kpi-card kpi-card-clickable" tabindex="0" role="button" data-modal-type="absent-employees" aria-label="View absent employees on {{ data.selected_date.strftime('%d %b %Y') }} (count: {{ data.absent }})">
     <div class="kpi-top">
       <span class="kpi-label">Absent</span>
       <span class="kpi-icon icon-amber"><i class="bi bi-person-dash"></i></span>
@@ -145,6 +145,7 @@
     <div class="kpi-value">{{ data.absent }}</div>
     <div class="kpi-foot">
       <span class="status-dot status-absent"></span>No valid check-in recorded
+      <span class="kpi-click-badge"><i class="bi bi-arrow-up-right"></i> View</span>
     </div>
   </article>
 
@@ -425,6 +426,58 @@
     `;
   };
 
+  const renderAbsentEmployees = (data) => {
+    modalIcon.className = 'modal-header-icon icon-amber';
+    modalIcon.innerHTML = '<i class="bi bi-person-dash"></i>';
+    modalTitle.textContent = 'Absent Employees';
+    modalSubtitle.textContent = `Employees with no check-in recorded on ${data.formatted_date || data.date}`;
+    modalRecordCount.textContent = `Total absent: ${data.count}`;
+
+    if (!data.employees || data.employees.length === 0) {
+      modalBody.innerHTML = `
+        <div class="empty-state compact-empty">
+          <span class="empty-icon" style="color:#209b69"><i class="bi bi-check2-circle"></i></span>
+          <strong>No absent employees</strong>
+          <p>Full workforce attendance recorded on ${escapeHtml(data.formatted_date || data.date)}!</p>
+        </div>
+      `;
+      return;
+    }
+
+    let rows = data.employees.map(emp => `
+      <tr>
+        <td>
+          <div class="person-cell">
+            <span class="avatar avatar-soft">${escapeHtml(emp.initials)}</span>
+            <span>
+              <strong>${escapeHtml(emp.full_name)}</strong>
+              <small>${escapeHtml(emp.employee_id.startsWith('SYS-') ? 'Login: ' + emp.employee_id : 'ID: ' + emp.employee_id)} · ${escapeHtml(emp.department)}</small>
+            </span>
+          </div>
+        </td>
+        <td><span class="table-primary">${escapeHtml(emp.job_title)}</span><small class="table-secondary">${escapeHtml(emp.role.toUpperCase())}</small></td>
+        <td><span class="shift-pill"><i class="bi bi-clock"></i> ${escapeHtml(emp.shift_timing)}</span></td>
+        <td><span class="badge badge-absent"><span></span> Absent</span></td>
+      </tr>
+    `).join('');
+
+    modalBody.innerHTML = `
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Employee</th>
+              <th>Job Title / Role</th>
+              <th>Assigned Shift</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    `;
+  };
+
   const loadCardDetails = (type) => {
     const selectedDate = dateInput ? dateInput.value : '';
     let url = '';
@@ -434,6 +487,8 @@
       url = `/api/dashboard/present-employees?date=${encodeURIComponent(selectedDate)}`;
     } else if (type === 'late-employees') {
       url = `/api/dashboard/late-employees?date=${encodeURIComponent(selectedDate)}`;
+    } else if (type === 'absent-employees') {
+      url = `/api/dashboard/absent-employees?date=${encodeURIComponent(selectedDate)}`;
     } else {
       return;
     }
@@ -450,6 +505,7 @@
         if (type === 'active-employees') renderActiveEmployees(data);
         else if (type === 'present-employees') renderPresentEmployees(data);
         else if (type === 'late-employees') renderLateEmployees(data);
+        else if (type === 'absent-employees') renderAbsentEmployees(data);
       })
       .catch(err => {
         modalBody.innerHTML = `

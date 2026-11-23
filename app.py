@@ -69,10 +69,16 @@ if os.environ.get("ENABLE_PROXY_FIX", "0") == "1":
     )
 
 # Predictable database path configuration
-Path(app.instance_path).mkdir(parents=True, exist_ok=True)
+data_dir = os.environ.get("DATA_DIR")
+if data_dir:
+    Path(data_dir).mkdir(parents=True, exist_ok=True)
+    default_db_path = Path(data_dir) / "balaji_workforce.sqlite3"
+else:
+    Path(app.instance_path).mkdir(parents=True, exist_ok=True)
+    default_db_path = Path(app.instance_path) / "balaji_workforce.sqlite3"
+
 raw_db_url = os.environ.get("DATABASE_URL")
 if not raw_db_url:
-    default_db_path = Path(app.instance_path) / "balaji_workforce.sqlite3"
     database_uri = f"sqlite:///{default_db_path.as_posix()}"
 else:
     # Normalize PostgreSQL URL schemes for SQLAlchemy (Render/Heroku supply postgres://)
@@ -143,43 +149,6 @@ def configure_sqlite_engine(dbapi_connection, connection_record):
 
 
 
-def ensure_db_schema():
-    """Ensure database tables and columns exist for existing databases without deleting records."""
-    with app.app_context():
-        try:
-            db.create_all()
-            # Only execute SQLite-specific schema introspection PRAGMAs on SQLite databases
-            if db.engine.dialect.name == "sqlite":
-                with db.engine.connect() as conn:
-                    res = conn.execute(db.text("PRAGMA table_info(users)")).fetchall()
-                    cols = {r[1] for r in res}
-                    if "phone" not in cols:
-                        conn.execute(db.text("ALTER TABLE users ADD COLUMN phone VARCHAR(30)"))
-                    if "shift_timing" not in cols:
-                        conn.execute(db.text("ALTER TABLE users ADD COLUMN shift_timing VARCHAR(40) DEFAULT '10:00 AM - 07:00 PM'"))
-
-                    att_res = conn.execute(db.text("PRAGMA table_info(attendance)")).fetchall()
-                    att_cols = {r[1] for r in att_res}
-                    if "break_start_at" not in att_cols:
-                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN break_start_at DATETIME"))
-                    if "break_end_at" not in att_cols:
-                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN break_end_at DATETIME"))
-                    if "exception_granted" not in att_cols:
-                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN exception_granted BOOLEAN DEFAULT 0"))
-                    if "marked_by_admin" not in att_cols:
-                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN marked_by_admin BOOLEAN DEFAULT 0"))
-                    if "admin_note" not in att_cols:
-                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN admin_note VARCHAR(255)"))
-                    if "checkin_accuracy" not in att_cols:
-                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN checkin_accuracy FLOAT"))
-                    if "checkout_accuracy" not in att_cols:
-                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN checkout_accuracy FLOAT"))
-                    conn.commit()
-        except Exception as exc:
-            app.logger.warning(f"Database schema inspection note: {exc}")
-
-
-ensure_db_schema()
 login_manager = LoginManager(app)
 login_manager.login_view = "login"
 login_manager.login_message = "Please sign in to continue."
@@ -204,6 +173,11 @@ def parse_shift_times(timing_str: str | None) -> tuple[time, time, time]:
     except Exception:
         pass
     return DEFAULT_SHIFT_START, DEFAULT_LATE_AFTER, DEFAULT_SHIFT_END
+
+
+def now_ist() -> datetime:
+    """Return current India local time as a naive datetime stored consistently in SQLite."""
+    return datetime.now(IST).replace(tzinfo=None, microsecond=0)
 
 
 class User(UserMixin, db.Model):
@@ -253,6 +227,7 @@ class Attendance(db.Model):
     checkout_accuracy = db.Column(db.Float, nullable=True)
     break_start_at = db.Column(db.DateTime, nullable=True)
     break_end_at = db.Column(db.DateTime, nullable=True)
+    total_break_seconds = db.Column(db.Integer, nullable=False, default=0)
     exception_granted = db.Column(db.Boolean, nullable=False, default=False)
     marked_by_admin = db.Column(db.Boolean, nullable=False, default=False)
     admin_note = db.Column(db.String(255), nullable=True)
@@ -294,12 +269,37 @@ class Attendance(db.Model):
         return self.status
 
     @property
+    def effective_break_seconds(self) -> int:
+        accumulated = int(self.total_break_seconds or 0)
+        # If break is currently active, add the current running break seconds
+        if self.break_in_progress and self.break_start_at:
+            curr_sec = int(max(0, (now_ist() - self.break_start_at).total_seconds()))
+            return accumulated + curr_sec
+        # Backwards compatibility: if total_break_seconds is 0 but start and end exist
+        if accumulated == 0 and self.break_start_at and self.break_end_at:
+            return int(max(0, (self.break_end_at - self.break_start_at).total_seconds()))
+        return accumulated
+
+    @property
     def break_display(self) -> str:
-        if self.break_start_at and self.break_end_at:
-            mins = max(1, int((self.break_end_at - self.break_start_at).total_seconds() // 60))
-            return f"{self.break_start_at.strftime('%I:%M %p')} – {self.break_end_at.strftime('%I:%M %p')} ({mins}m)"
-        elif self.break_start_at:
+        eff_sec = self.effective_break_seconds
+        eff_mins = eff_sec // 60
+        if self.break_in_progress:
+            if self.total_break_seconds and self.total_break_seconds > 0:
+                prev_mins = self.total_break_seconds // 60
+                return f"Started at {self.break_start_at.strftime('%I:%M %p')} (In progress · {prev_mins}m taken earlier)"
             return f"Started at {self.break_start_at.strftime('%I:%M %p')} (In progress)"
+
+        if eff_sec > 0:
+            mins = max(1, eff_mins)
+            # If single break interval and accumulated matches that single interval:
+            if self.break_start_at and self.break_end_at and abs(int((self.break_end_at - self.break_start_at).total_seconds()) - eff_sec) < 60:
+                return f"{self.break_start_at.strftime('%I:%M %p')} – {self.break_end_at.strftime('%I:%M %p')} ({mins}m)"
+            # If multiple breaks taken across shift:
+            if self.break_start_at and self.break_end_at:
+                return f"{mins}m total (Last: {self.break_start_at.strftime('%I:%M %p')} – {self.break_end_at.strftime('%I:%M %p')})"
+            return f"{mins}m total"
+
         return "Not taken"
 
     @property
@@ -311,11 +311,7 @@ class Attendance(db.Model):
         if not self.checkout_at:
             return "In progress"
         total_seconds = (self.checkout_at - self.checkin_at).total_seconds()
-        break_seconds = 0
-        if self.break_start_at and self.break_end_at:
-            break_seconds = (self.break_end_at - self.break_start_at).total_seconds()
-        elif self.break_start_at:
-            break_seconds = 3600
+        break_seconds = self.effective_break_seconds
         net_seconds = max(0, total_seconds - break_seconds)
         hours = int(net_seconds // 3600)
         minutes = int((net_seconds % 3600) // 60)
@@ -326,9 +322,80 @@ class Attendance(db.Model):
         return self.checkin_latitude is not None and self.checkin_longitude is not None
 
 
-def now_ist() -> datetime:
-    """Return current India local time as a naive datetime stored consistently in SQLite."""
-    return datetime.now(IST).replace(tzinfo=None, microsecond=0)
+def seed_initial_accounts():
+    """Create default demo workforce accounts if none exist."""
+    demo_users = [
+        {"employee_id": "BW-1001", "full_name": "Dhyan", "email": "admin@balaji.demo", "phone": "9876500001", "role": "admin", "department": "Finance", "job_title": "System Administrator", "shift_timing": "10:00 AM - 07:00 PM"},
+        {"employee_id": "BW-1002", "full_name": "Rohan Shetty", "email": "manager@balaji.demo", "phone": "9876500002", "role": "manager", "department": "Tally", "job_title": "Department Manager", "shift_timing": "10:00 AM - 07:00 PM"},
+        {"employee_id": "BW-1003", "full_name": "Kiran Kumar", "email": "kiran@balaji.demo", "phone": "9876500003", "role": "employee", "department": "Operations", "job_title": "Operations Lead", "shift_timing": "10:00 AM - 07:00 PM"},
+        {"employee_id": "BW-1004", "full_name": "Suresh Patil", "email": "driver@balaji.demo", "phone": "9876500004", "role": "employee", "department": "Operations", "job_title": "Vehicle Driver", "shift_timing": "10:00 AM - 07:00 PM"},
+        {"employee_id": "BW-1005", "full_name": "Pooja Nayak", "email": "staff@balaji.demo", "phone": "9876500005", "role": "employee", "department": "Operations", "job_title": "Dispatch Coordinator", "shift_timing": "10:00 AM - 07:00 PM"},
+    ]
+    for udata in demo_users:
+        if not User.query.filter_by(email=udata["email"]).first():
+            user = User(
+                employee_id=udata["employee_id"],
+                full_name=udata["full_name"],
+                email=udata["email"],
+                phone=udata["phone"],
+                role=udata["role"],
+                department=udata["department"],
+                job_title=udata["job_title"],
+                shift_timing=udata["shift_timing"],
+                active=True,
+            )
+            user.set_password("DemoPass123!")
+            db.session.add(user)
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        app.logger.warning(f"Could not commit initial demo accounts: {e}")
+
+
+def ensure_db_schema():
+    """Ensure database tables and columns exist for existing databases without deleting records."""
+    with app.app_context():
+        try:
+            db.create_all()
+            # Only execute SQLite-specific schema introspection PRAGMAs on SQLite databases
+            if db.engine.dialect.name == "sqlite":
+                with db.engine.connect() as conn:
+                    res = conn.execute(db.text("PRAGMA table_info(users)")).fetchall()
+                    cols = {r[1] for r in res}
+                    if "phone" not in cols:
+                        conn.execute(db.text("ALTER TABLE users ADD COLUMN phone VARCHAR(30)"))
+                    if "shift_timing" not in cols:
+                        conn.execute(db.text("ALTER TABLE users ADD COLUMN shift_timing VARCHAR(40) DEFAULT '10:00 AM - 07:00 PM'"))
+
+                    att_res = conn.execute(db.text("PRAGMA table_info(attendance)")).fetchall()
+                    att_cols = {r[1] for r in att_res}
+                    if "break_start_at" not in att_cols:
+                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN break_start_at DATETIME"))
+                    if "break_end_at" not in att_cols:
+                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN break_end_at DATETIME"))
+                    if "exception_granted" not in att_cols:
+                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN exception_granted BOOLEAN DEFAULT 0"))
+                    if "marked_by_admin" not in att_cols:
+                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN marked_by_admin BOOLEAN DEFAULT 0"))
+                    if "admin_note" not in att_cols:
+                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN admin_note VARCHAR(255)"))
+                    if "checkin_accuracy" not in att_cols:
+                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN checkin_accuracy FLOAT"))
+                    if "checkout_accuracy" not in att_cols:
+                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN checkout_accuracy FLOAT"))
+                    if "total_break_seconds" not in att_cols:
+                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN total_break_seconds INTEGER DEFAULT 0"))
+                    conn.commit()
+
+            # Seed demo workforce accounts if database is empty
+            if not User.query.filter_by(role="admin").first():
+                seed_initial_accounts()
+        except Exception as exc:
+            app.logger.warning(f"Database schema inspection note: {exc}")
+
+
+ensure_db_schema()
 
 
 @login_manager.user_loader
@@ -525,6 +592,43 @@ def api_dashboard_present_employees():
         formatted_date=target_date.strftime("%d %b %Y"),
         count=len(result),
         records=result,
+    )
+
+
+@app.route("/api/dashboard/absent-employees")
+@roles_required("admin", "manager")
+def api_dashboard_absent_employees():
+    """Return active employees who have no attendance record for the selected dashboard date."""
+    today = now_ist().date()
+    target_date = parse_date(request.args.get("date"), today) or today
+    roster = (
+        team_query(User.query.filter(User.active.is_(True)))
+        .order_by(User.full_name.asc())
+        .all()
+    )
+    records = attendance_for_dashboard(target_date)
+    present_ids = {r.user_id for r in records}
+
+    absent_users = [u for u in roster if u.id not in present_ids]
+    result = []
+    for u in absent_users:
+        result.append({
+            "id": u.id,
+            "employee_id": u.employee_id,
+            "full_name": u.full_name,
+            "initials": u.initials,
+            "department": u.department,
+            "job_title": u.job_title or "Employee",
+            "shift_timing": u.shift_timing or "10:00 AM - 07:00 PM",
+            "role": u.role,
+            "status": "Absent",
+        })
+    return jsonify(
+        ok=True,
+        date=target_date.isoformat(),
+        formatted_date=target_date.strftime("%d %b %Y"),
+        count=len(result),
+        employees=result,
     )
 
 
@@ -973,6 +1077,8 @@ def check_out():
         return jsonify(ok=False, message="You have already checked out today."), 409
     latitude, longitude, accuracy = coordinates
     if record.break_in_progress:
+        delta_sec = max(1, int((now - record.break_start_at).total_seconds()))
+        record.total_break_seconds = (record.total_break_seconds or 0) + delta_sec
         record.break_end_at = now
     record.checkout_at = now
     record.checkout_latitude = latitude
@@ -1008,9 +1114,13 @@ def break_start():
         db.session.rollback()
         app.logger.error(f"Failed to start break for user {current_user.id}: {exc}")
         return jsonify(ok=False, message="Could not update break status. Please try again."), 500
+    prev_mins = (record.total_break_seconds or 0) // 60
+    msg = f"1-hour break started at {now.strftime('%I:%M %p')}."
+    if prev_mins > 0:
+        msg = f"Break started at {now.strftime('%I:%M %p')} ({prev_mins}m taken earlier today)."
     return jsonify(
         ok=True,
-        message=f"1-hour break started at {now.strftime('%I:%M %p')}.",
+        message=msg,
         break_start=now.strftime("%I:%M %p"),
     ), 200
 
@@ -1024,6 +1134,8 @@ def break_end():
         return jsonify(ok=False, message="No active attendance record for today."), 409
     if not record.break_start_at or record.break_end_at is not None:
         return jsonify(ok=False, message="No active break in progress to resume from."), 409
+    delta_sec = max(1, int((now - record.break_start_at).total_seconds()))
+    record.total_break_seconds = (record.total_break_seconds or 0) + delta_sec
     record.break_end_at = now
     try:
         db.session.commit()
@@ -1031,10 +1143,15 @@ def break_end():
         db.session.rollback()
         app.logger.error(f"Failed to end break for user {current_user.id}: {exc}")
         return jsonify(ok=False, message="Could not resume shift. Please try again."), 500
-    mins = max(1, int((now - record.break_start_at).total_seconds() // 60))
+    this_break_mins = max(1, delta_sec // 60)
+    total_mins = max(1, record.total_break_seconds // 60)
+    if total_mins > this_break_mins:
+        msg = f"Break ended at {now.strftime('%I:%M %p')} ({this_break_mins} min this break · {total_mins} min total). Resumed shift."
+    else:
+        msg = f"Break ended at {now.strftime('%I:%M %p')} ({this_break_mins} min buffer recorded). Resumed shift."
     return jsonify(
         ok=True,
-        message=f"Break ended at {now.strftime('%I:%M %p')} ({mins} min buffer recorded). Resumed shift.",
+        message=msg,
         break_end=now.strftime("%I:%M %p"),
     ), 200
 
@@ -1136,6 +1253,12 @@ def manual_mark_attendance():
         if include_break:
             record.break_start_at = break_start_dt
             record.break_end_at = break_end_dt
+            if break_start_dt and break_end_dt:
+                record.total_break_seconds = max(0, int((break_end_dt - break_start_dt).total_seconds()))
+        else:
+            record.break_start_at = None
+            record.break_end_at = None
+            record.total_break_seconds = 0
         if grant_exception:
             record.exception_granted = True
         record.marked_by_admin = True
@@ -1152,6 +1275,7 @@ def manual_mark_attendance():
             checkout_longitude=lon if checkout_dt else None,
             break_start_at=break_start_dt,
             break_end_at=break_end_dt,
+            total_break_seconds=max(0, int((break_end_dt - break_start_dt).total_seconds())) if (include_break and break_start_dt and break_end_dt) else 0,
             exception_granted=grant_exception,
             marked_by_admin=True,
             admin_note=admin_note,
@@ -1484,6 +1608,12 @@ def resolve_employee_issue(user_id: int):
         if include_break:
             record.break_start_at = break_start_dt
             record.break_end_at = break_end_dt
+            if break_start_dt and break_end_dt:
+                record.total_break_seconds = max(0, int((break_end_dt - break_start_dt).total_seconds()))
+        else:
+            record.break_start_at = None
+            record.break_end_at = None
+            record.total_break_seconds = 0
         if grant_exception:
             record.exception_granted = True
         record.marked_by_admin = True
@@ -1501,6 +1631,7 @@ def resolve_employee_issue(user_id: int):
             checkout_longitude=lon if checkout_dt else None,
             break_start_at=break_start_dt,
             break_end_at=break_end_dt,
+            total_break_seconds=max(0, int((break_end_dt - break_start_dt).total_seconds())) if (include_break and break_start_dt and break_end_dt) else 0,
             exception_granted=grant_exception,
             marked_by_admin=True,
             admin_note=admin_note,
