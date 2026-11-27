@@ -50,7 +50,7 @@ Open **http://127.0.0.1:5000**. GPS is supported on localhost in modern browsers
 
 ## Demo accounts
 
-All demo accounts use the password `DemoPass123!` for the local demonstration:
+All demo accounts use the password `esallacupnamdu` for the local demonstration:
 
 | Role | Sign-in identifier | Scope |
 | --- | --- | --- |
