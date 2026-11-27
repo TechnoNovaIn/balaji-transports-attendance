@@ -350,13 +350,13 @@ class Attendance(db.Model):
 
 
 def seed_initial_accounts():
-    """Create default demo workforce accounts if none exist."""
+    """Create default admin account (other demo accounts are disabled by default)."""
     demo_users = [
-        {"employee_id": "BW-1001", "full_name": "Dhyan", "email": "admin@balaji.demo", "phone": "9876500001", "role": "admin", "department": "Finance", "job_title": "System Administrator", "shift_timing": "10:00 AM - 07:00 PM", "branch": "Tumkur (Satyamangala)"},
-        {"employee_id": "BW-1002", "full_name": "Rohan Shetty", "email": "manager@balaji.demo", "phone": "9876500002", "role": "manager", "department": "Tally", "job_title": "Department Manager", "shift_timing": "10:00 AM - 07:00 PM", "branch": "Tumkur (Satyamangala)"},
-        {"employee_id": "BW-1003", "full_name": "Kiran Kumar", "email": "kiran@balaji.demo", "phone": "9876500003", "role": "employee", "department": "Operations", "job_title": "Operations Lead", "shift_timing": "10:00 AM - 07:00 PM", "branch": "Tumkur (Satyamangala)"},
-        {"employee_id": "BW-1004", "full_name": "Suresh Patil", "email": "driver@balaji.demo", "phone": "9876500004", "role": "employee", "department": "Operations", "job_title": "Vehicle Driver", "shift_timing": "10:00 AM - 07:00 PM", "branch": "Tumkur (Satyamangala)"},
-        {"employee_id": "BW-1005", "full_name": "Pooja Nayak", "email": "staff@balaji.demo", "phone": "9876500005", "role": "employee", "department": "Operations", "job_title": "Dispatch Coordinator", "shift_timing": "10:00 AM - 07:00 PM", "branch": "Tumkur (Satyamangala)"},
+        {"employee_id": "BW-1001", "full_name": "Dhyan", "email": "admin@balaji.demo", "phone": "9876500001", "role": "admin", "department": "Finance", "job_title": "System Administrator", "shift_timing": "10:00 AM - 07:00 PM", "branch": "Tumkur (Satyamangala)", "active": True},
+        {"employee_id": "BW-1002", "full_name": "Rohan Shetty", "email": "manager@balaji.demo", "phone": "9876500002", "role": "manager", "department": "Tally", "job_title": "Department Manager", "shift_timing": "10:00 AM - 07:00 PM", "branch": "Tumkur (Satyamangala)", "active": False},
+        {"employee_id": "BW-1003", "full_name": "Kiran Kumar", "email": "kiran@balaji.demo", "phone": "9876500003", "role": "employee", "department": "Operations", "job_title": "Operations Lead", "shift_timing": "10:00 AM - 07:00 PM", "branch": "Tumkur (Satyamangala)", "active": False},
+        {"employee_id": "BW-1004", "full_name": "Suresh Patil", "email": "driver@balaji.demo", "phone": "9876500004", "role": "employee", "department": "Operations", "job_title": "Vehicle Driver", "shift_timing": "10:00 AM - 07:00 PM", "branch": "Tumkur (Satyamangala)", "active": False},
+        {"employee_id": "BW-1005", "full_name": "Pooja Nayak", "email": "staff@balaji.demo", "phone": "9876500005", "role": "employee", "department": "Operations", "job_title": "Dispatch Coordinator", "shift_timing": "10:00 AM - 07:00 PM", "branch": "Tumkur (Satyamangala)", "active": False},
     ]
     for udata in demo_users:
         if not User.query.filter_by(email=udata["email"]).first():
@@ -370,7 +370,7 @@ def seed_initial_accounts():
                 department=udata["department"],
                 job_title=udata["job_title"],
                 shift_timing=udata["shift_timing"],
-                active=True,
+                active=udata["active"],
             )
             user.set_password("DemoPass123!")
             db.session.add(user)
