@@ -180,6 +180,31 @@ def now_ist() -> datetime:
     return datetime.now(IST).replace(tzinfo=None, microsecond=0)
 
 
+BRANCH_CHOICES = ["Tumkur (Satyamangala)", "Bangalore (Whitefield)"]
+DEFAULT_BRANCH = "Tumkur (Satyamangala)"
+
+BRANCH_CONFIG = {
+    "Tumkur (Satyamangala)": {
+        "name": "Tumkur (Satyamangala)",
+        "lat_env": "GEOFENCE_LATITUDE",
+        "lon_env": "GEOFENCE_LONGITUDE",
+        "radius_env": "GEOFENCE_RADIUS_METERS",
+        "default_lat": 13.3698889,
+        "default_lon": 77.1190278,
+        "default_radius": 200.0,
+    },
+    "Bangalore (Whitefield)": {
+        "name": "Bangalore (Whitefield)",
+        "lat_env": "WHITEFIELD_GEOFENCE_LATITUDE",
+        "lon_env": "WHITEFIELD_GEOFENCE_LONGITUDE",
+        "radius_env": "WHITEFIELD_GEOFENCE_RADIUS_METERS",
+        "default_lat": None,  # Coordinates left blank as requested; will be updated once provided
+        "default_lon": None,  # Coordinates left blank as requested; will be updated once provided
+        "default_radius": 100.0,
+    },
+}
+
+
 class User(UserMixin, db.Model):
     __tablename__ = "users"
     id = db.Column(db.Integer, primary_key=True)
@@ -187,6 +212,7 @@ class User(UserMixin, db.Model):
     full_name = db.Column(db.String(120), nullable=False)
     email = db.Column(db.String(160), unique=True, nullable=False, index=True)
     phone = db.Column(db.String(30), nullable=True, index=True)
+    branch = db.Column(db.String(80), nullable=False, default="Tumkur (Satyamangala)", index=True)
     shift_timing = db.Column(db.String(40), nullable=True, default="10:00 AM - 07:00 PM")
     department = db.Column(db.String(80), nullable=False, default="Operations")
     job_title = db.Column(db.String(80), nullable=True, default="Employee")
@@ -231,6 +257,7 @@ class Attendance(db.Model):
     exception_granted = db.Column(db.Boolean, nullable=False, default=False)
     marked_by_admin = db.Column(db.Boolean, nullable=False, default=False)
     admin_note = db.Column(db.String(255), nullable=True)
+    branch = db.Column(db.String(80), nullable=True, index=True)
     user = db.relationship("User", back_populates="attendance")
 
     @property
@@ -325,11 +352,11 @@ class Attendance(db.Model):
 def seed_initial_accounts():
     """Create default demo workforce accounts if none exist."""
     demo_users = [
-        {"employee_id": "BW-1001", "full_name": "Dhyan", "email": "admin@balaji.demo", "phone": "9876500001", "role": "admin", "department": "Finance", "job_title": "System Administrator", "shift_timing": "10:00 AM - 07:00 PM"},
-        {"employee_id": "BW-1002", "full_name": "Rohan Shetty", "email": "manager@balaji.demo", "phone": "9876500002", "role": "manager", "department": "Tally", "job_title": "Department Manager", "shift_timing": "10:00 AM - 07:00 PM"},
-        {"employee_id": "BW-1003", "full_name": "Kiran Kumar", "email": "kiran@balaji.demo", "phone": "9876500003", "role": "employee", "department": "Operations", "job_title": "Operations Lead", "shift_timing": "10:00 AM - 07:00 PM"},
-        {"employee_id": "BW-1004", "full_name": "Suresh Patil", "email": "driver@balaji.demo", "phone": "9876500004", "role": "employee", "department": "Operations", "job_title": "Vehicle Driver", "shift_timing": "10:00 AM - 07:00 PM"},
-        {"employee_id": "BW-1005", "full_name": "Pooja Nayak", "email": "staff@balaji.demo", "phone": "9876500005", "role": "employee", "department": "Operations", "job_title": "Dispatch Coordinator", "shift_timing": "10:00 AM - 07:00 PM"},
+        {"employee_id": "BW-1001", "full_name": "Dhyan", "email": "admin@balaji.demo", "phone": "9876500001", "role": "admin", "department": "Finance", "job_title": "System Administrator", "shift_timing": "10:00 AM - 07:00 PM", "branch": "Tumkur (Satyamangala)"},
+        {"employee_id": "BW-1002", "full_name": "Rohan Shetty", "email": "manager@balaji.demo", "phone": "9876500002", "role": "manager", "department": "Tally", "job_title": "Department Manager", "shift_timing": "10:00 AM - 07:00 PM", "branch": "Tumkur (Satyamangala)"},
+        {"employee_id": "BW-1003", "full_name": "Kiran Kumar", "email": "kiran@balaji.demo", "phone": "9876500003", "role": "employee", "department": "Operations", "job_title": "Operations Lead", "shift_timing": "10:00 AM - 07:00 PM", "branch": "Tumkur (Satyamangala)"},
+        {"employee_id": "BW-1004", "full_name": "Suresh Patil", "email": "driver@balaji.demo", "phone": "9876500004", "role": "employee", "department": "Operations", "job_title": "Vehicle Driver", "shift_timing": "10:00 AM - 07:00 PM", "branch": "Tumkur (Satyamangala)"},
+        {"employee_id": "BW-1005", "full_name": "Pooja Nayak", "email": "staff@balaji.demo", "phone": "9876500005", "role": "employee", "department": "Operations", "job_title": "Dispatch Coordinator", "shift_timing": "10:00 AM - 07:00 PM", "branch": "Tumkur (Satyamangala)"},
     ]
     for udata in demo_users:
         if not User.query.filter_by(email=udata["email"]).first():
@@ -338,6 +365,7 @@ def seed_initial_accounts():
                 full_name=udata["full_name"],
                 email=udata["email"],
                 phone=udata["phone"],
+                branch=udata.get("branch", DEFAULT_BRANCH),
                 role=udata["role"],
                 department=udata["department"],
                 job_title=udata["job_title"],
@@ -367,6 +395,8 @@ def ensure_db_schema():
                         conn.execute(db.text("ALTER TABLE users ADD COLUMN phone VARCHAR(30)"))
                     if "shift_timing" not in cols:
                         conn.execute(db.text("ALTER TABLE users ADD COLUMN shift_timing VARCHAR(40) DEFAULT '10:00 AM - 07:00 PM'"))
+                    if "branch" not in cols:
+                        conn.execute(db.text("ALTER TABLE users ADD COLUMN branch VARCHAR(80) DEFAULT 'Tumkur (Satyamangala)'"))
 
                     att_res = conn.execute(db.text("PRAGMA table_info(attendance)")).fetchall()
                     att_cols = {r[1] for r in att_res}
@@ -386,6 +416,8 @@ def ensure_db_schema():
                         conn.execute(db.text("ALTER TABLE attendance ADD COLUMN checkout_accuracy FLOAT"))
                     if "total_break_seconds" not in att_cols:
                         conn.execute(db.text("ALTER TABLE attendance ADD COLUMN total_break_seconds INTEGER DEFAULT 0"))
+                    if "branch" not in att_cols:
+                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN branch VARCHAR(80)"))
                     conn.commit()
 
             # Seed demo workforce accounts if database is empty
@@ -479,12 +511,14 @@ def in_scope_user(user_id: int) -> User | None:
     return user
 
 
-def attendance_for_dashboard(selected_date: date):
-    """Return dashboard attendance limited to the authenticated user's scope."""
+def attendance_for_dashboard(selected_date: date, branch: str | None = None):
+    """Return dashboard attendance limited to the authenticated user's scope and optional branch."""
     q = Attendance.query.join(User).filter(
         Attendance.attendance_date == selected_date,
         User.active.is_(True),
     )
+    if branch and branch in BRANCH_CHOICES:
+        q = q.filter(User.branch == branch)
     if current_user.role == "manager":
         q = q.filter(User.department == current_user.department)
     elif current_user.role == "employee":
@@ -493,12 +527,15 @@ def attendance_for_dashboard(selected_date: date):
     return q.all()
 
 
-def dashboard_data(selected_date: date) -> dict:
+def dashboard_data(selected_date: date, branch: str | None = None) -> dict:
     if current_user.role == "employee":
         roster = [current_user._get_current_object()]
     else:
-        roster = team_query(User.query.filter(User.active.is_(True))).all()
-    records = attendance_for_dashboard(selected_date)
+        roster_query = User.query.filter(User.active.is_(True))
+        if branch and branch in BRANCH_CHOICES:
+            roster_query = roster_query.filter(User.branch == branch)
+        roster = team_query(roster_query).all()
+    records = attendance_for_dashboard(selected_date, branch=branch)
     present_ids = {row.user_id for row in records}
     present_count = len(present_ids)
     absent_count = max(0, len(roster) - present_count)
@@ -512,6 +549,8 @@ def dashboard_data(selected_date: date) -> dict:
             total = Attendance.query.filter_by(user_id=current_user.id, attendance_date=day).count()
         else:
             trend_query = Attendance.query.join(User).filter(Attendance.attendance_date == day, User.active.is_(True))
+            if branch and branch in BRANCH_CHOICES:
+                trend_query = trend_query.filter(User.branch == branch)
             if current_user.role == "manager":
                 trend_query = trend_query.filter(User.department == current_user.department)
             total = trend_query.count()
@@ -527,15 +566,20 @@ def dashboard_data(selected_date: date) -> dict:
         "recent": recent,
         "selected_date": selected_date,
         "records": records,
+        "selected_branch": branch or "",
     }
 
 
 @app.route("/api/dashboard/active-employees")
 @roles_required("admin", "manager")
 def api_dashboard_active_employees():
-    """Return all currently active workforce members within the user's scope."""
+    """Return all currently active workforce members within the user's scope and optional branch."""
+    branch = request.args.get("branch", "").strip()
+    q = User.query.filter(User.active.is_(True))
+    if branch and branch in BRANCH_CHOICES:
+        q = q.filter(User.branch == branch)
     active_users = (
-        team_query(User.query.filter(User.active.is_(True)))
+        team_query(q)
         .order_by(User.full_name.asc())
         .all()
     )
@@ -546,6 +590,7 @@ def api_dashboard_active_employees():
             "employee_id": u.employee_id,
             "full_name": u.full_name,
             "initials": u.initials,
+            "branch": u.branch,
             "department": u.department,
             "job_title": u.job_title or "Employee",
             "shift_timing": u.shift_timing or "10:00 AM - 07:00 PM",
@@ -558,10 +603,11 @@ def api_dashboard_active_employees():
 @app.route("/api/dashboard/present-employees")
 @roles_required("admin", "manager")
 def api_dashboard_present_employees():
-    """Return employees who have valid attendance for the selected dashboard date."""
+    """Return employees who have valid attendance for the selected dashboard date and optional branch."""
     today = now_ist().date()
     target_date = parse_date(request.args.get("date"), today) or today
-    records = attendance_for_dashboard(target_date)
+    branch = request.args.get("branch", "").strip()
+    records = attendance_for_dashboard(target_date, branch=branch if branch in BRANCH_CHOICES else None)
     sorted_records = sorted(records, key=lambda r: r.checkin_at, reverse=True)
 
     result = []
@@ -572,6 +618,7 @@ def api_dashboard_present_employees():
             "employee_id": r.user.employee_id,
             "full_name": r.user.full_name,
             "initials": r.user.initials,
+            "branch": r.user.branch or r.branch or DEFAULT_BRANCH,
             "department": r.user.department,
             "shift_timing": r.user.shift_timing or "10:00 AM - 07:00 PM",
             "checkin_time": r.checkin_at.strftime("%I:%M %p"),
@@ -598,15 +645,19 @@ def api_dashboard_present_employees():
 @app.route("/api/dashboard/absent-employees")
 @roles_required("admin", "manager")
 def api_dashboard_absent_employees():
-    """Return active employees who have no attendance record for the selected dashboard date."""
+    """Return active employees who have no attendance record for the selected dashboard date and optional branch."""
     today = now_ist().date()
     target_date = parse_date(request.args.get("date"), today) or today
+    branch = request.args.get("branch", "").strip()
+    roster_query = User.query.filter(User.active.is_(True))
+    if branch and branch in BRANCH_CHOICES:
+        roster_query = roster_query.filter(User.branch == branch)
     roster = (
-        team_query(User.query.filter(User.active.is_(True)))
+        team_query(roster_query)
         .order_by(User.full_name.asc())
         .all()
     )
-    records = attendance_for_dashboard(target_date)
+    records = attendance_for_dashboard(target_date, branch=branch if branch in BRANCH_CHOICES else None)
     present_ids = {r.user_id for r in records}
 
     absent_users = [u for u in roster if u.id not in present_ids]
@@ -617,6 +668,7 @@ def api_dashboard_absent_employees():
             "employee_id": u.employee_id,
             "full_name": u.full_name,
             "initials": u.initials,
+            "branch": u.branch,
             "department": u.department,
             "job_title": u.job_title or "Employee",
             "shift_timing": u.shift_timing or "10:00 AM - 07:00 PM",
@@ -635,10 +687,11 @@ def api_dashboard_absent_employees():
 @app.route("/api/dashboard/late-employees")
 @roles_required("admin", "manager")
 def api_dashboard_late_employees():
-    """Return employees who arrived late on the selected dashboard date."""
+    """Return employees who arrived late on the selected dashboard date and optional branch."""
     today = now_ist().date()
     target_date = parse_date(request.args.get("date"), today) or today
-    records = attendance_for_dashboard(target_date)
+    branch = request.args.get("branch", "").strip()
+    records = attendance_for_dashboard(target_date, branch=branch if branch in BRANCH_CHOICES else None)
     late_records = [r for r in records if r.status == "Late"]
     sorted_records = sorted(late_records, key=lambda r: r.checkin_at, reverse=True)
 
@@ -653,6 +706,7 @@ def api_dashboard_late_employees():
             "employee_id": r.user.employee_id,
             "full_name": r.user.full_name,
             "initials": r.user.initials,
+            "branch": r.user.branch or r.branch or DEFAULT_BRANCH,
             "department": r.user.department,
             "shift_timing": r.user.shift_timing or "10:00 AM - 07:00 PM",
             "shift_start": shift_start.strftime("%I:%M %p"),
@@ -897,14 +951,16 @@ def download_apk():
 def dashboard():
     today = now_ist().date()
     if current_user.role == "employee":
+        user_branch = getattr(current_user, "branch", None) or DEFAULT_BRANCH
         today_record = Attendance.query.filter_by(user_id=current_user.id, attendance_date=today).first()
         history = Attendance.query.filter_by(user_id=current_user.id).order_by(Attendance.attendance_date.desc()).limit(30).all()
-        fence = configured_geofence()
+        fence = configured_geofence(user_branch)
         return render_template(
             "dashboard.html",
             is_employee=True,
             record=today_record,
             history=history,
+            user_branch=user_branch,
             geofence_configured=fence is not None,
             geofence_radius_meters=round(fence[2]) if fence else None,
             shift_timing=current_user.shift_timing or "10:00 AM - 07:00 PM",
@@ -914,8 +970,15 @@ def dashboard():
         )
     selected_date = parse_date(request.args.get("date"), today) or today
     selected_date = min(selected_date, today)
-    data = dashboard_data(selected_date)
-    return render_template("dashboard.html", is_employee=False, data=data)
+    selected_branch = request.args.get("branch", "").strip()
+    data = dashboard_data(selected_date, branch=selected_branch if selected_branch in BRANCH_CHOICES else None)
+    return render_template(
+        "dashboard.html",
+        is_employee=False,
+        data=data,
+        selected_branch=selected_branch,
+        branches=BRANCH_CHOICES,
+    )
 
 
 @app.route("/attendance")
@@ -923,13 +986,15 @@ def dashboard():
 def attendance_page():
     if current_user.role == "admin":
         return redirect(url_for("dashboard"))
+    user_branch = getattr(current_user, "branch", None) or DEFAULT_BRANCH
     today_record = Attendance.query.filter_by(user_id=current_user.id, attendance_date=now_ist().date()).first()
     history = Attendance.query.filter_by(user_id=current_user.id).order_by(Attendance.attendance_date.desc()).limit(30).all()
-    fence = configured_geofence()
+    fence = configured_geofence(user_branch)
     return render_template(
         "attendance.html",
         record=today_record,
         history=history,
+        user_branch=user_branch,
         geofence_configured=fence is not None,
         geofence_radius_meters=round(fence[2]) if fence else None,
         shift_timing=current_user.shift_timing or "10:00 AM - 07:00 PM",
@@ -963,12 +1028,26 @@ def parse_coordinates(payload: dict) -> tuple[float, float, float | None] | None
     return latitude, longitude, accuracy
 
 
-def configured_geofence() -> tuple[float, float, float] | None:
-    """Return (latitude, longitude, radius metres), or None if invalid/unconfigured."""
+def configured_geofence(branch: str | None = None) -> tuple[float, float, float] | None:
+    """Return (latitude, longitude, radius metres) for the given branch, or None if unconfigured."""
+    branch_name = branch
+    if not branch_name and current_user.is_authenticated:
+        branch_name = getattr(current_user, "branch", None)
+    if not branch_name:
+        branch_name = DEFAULT_BRANCH
+    conf = BRANCH_CONFIG.get(branch_name, BRANCH_CONFIG[DEFAULT_BRANCH])
+
+    # Allow testing override via app.config or os.environ
+    lat_val = current_app.config.get(conf["lat_env"], os.environ.get(conf["lat_env"], conf["default_lat"]))
+    lon_val = current_app.config.get(conf["lon_env"], os.environ.get(conf["lon_env"], conf["default_lon"]))
+    radius_val = current_app.config.get(conf["radius_env"], os.environ.get(conf["radius_env"], conf["default_radius"]))
+
+    if lat_val is None or lon_val is None or str(lat_val).strip() == "" or str(lon_val).strip() == "":
+        return None
     try:
-        latitude = float(current_app.config.get("GEOFENCE_LATITUDE", ""))
-        longitude = float(current_app.config.get("GEOFENCE_LONGITUDE", ""))
-        radius = float(current_app.config.get("GEOFENCE_RADIUS_METERS", "100"))
+        latitude = float(lat_val)
+        longitude = float(lon_val)
+        radius = float(radius_val) if radius_val is not None else 100.0
     except (TypeError, ValueError):
         return None
     if not math.isfinite(latitude) or not math.isfinite(longitude) or not math.isfinite(radius):
@@ -990,18 +1069,24 @@ def distance_between_meters(lat1: float, lon1: float, lat2: float, lon2: float) 
     return 2 * earth_radius_m * math.asin(math.sqrt(a))
 
 
-def geofence_error(coordinates: tuple[float, float, float | None]):
+def geofence_error(coordinates: tuple[float, float, float | None], branch: str | None = None):
     """Return (distance, error_response); an error_response is a Flask (body, status) pair."""
-    fence = configured_geofence()
+    branch_name = branch
+    if not branch_name and current_user.is_authenticated:
+        branch_name = getattr(current_user, "branch", None)
+    if not branch_name:
+        branch_name = DEFAULT_BRANCH
+
+    fence = configured_geofence(branch_name)
     if fence is None:
         return None, (jsonify(
             ok=False,
-            message="Factory geofencing is not configured. Contact the administrator before recording attendance."
+            message=f"Factory geofencing is not configured for {branch_name}. Contact the administrator before recording attendance."
         ), 503)
     factory_lat, factory_lon, radius = fence
     lat, lon, accuracy = coordinates
 
-    max_acc = current_app.config.get("GEOFENCE_MAX_ACCURACY_METERS")
+    max_acc = current_app.config.get("GEOFENCE_MAX_ACCURACY_METERS", 500.0)
     if accuracy is not None and max_acc is not None and accuracy > max_acc:
         return None, (jsonify(
             ok=False,
@@ -1014,9 +1099,10 @@ def geofence_error(coordinates: tuple[float, float, float | None]):
     if distance > radius:
         return distance, (jsonify(
             ok=False,
-            message=f"Outside the approved factory perimeter. You are approximately {round(distance)} m away; the allowed radius is {round(radius)} m.",
+            message=f"Outside the approved factory perimeter for {branch_name}. You are approximately {round(distance)} m away; the allowed radius is {round(radius)} m.",
             distance_meters=round(distance),
             radius_meters=round(radius),
+            branch=branch_name,
         ), 403)
     return distance, None
 
@@ -1028,7 +1114,8 @@ def check_in():
     coordinates = parse_coordinates(payload)
     if not coordinates:
         return jsonify(ok=False, message="Valid GPS coordinates are required. Allow location access and try again."), 400
-    distance, fence_error = geofence_error(coordinates)
+    user_branch = getattr(current_user, "branch", None) or DEFAULT_BRANCH
+    distance, fence_error = geofence_error(coordinates, branch=user_branch)
     if fence_error:
         return fence_error
     now = now_ist()
@@ -1046,6 +1133,7 @@ def check_in():
         checkin_latitude=latitude,
         checkin_longitude=longitude,
         checkin_accuracy=accuracy,
+        branch=user_branch,
     )
     db.session.add(record)
     try:
@@ -1056,6 +1144,7 @@ def check_in():
         return jsonify(ok=False, message="Attendance could not be saved. Please try again."), 500
     return jsonify(ok=True, message=f"Check-in recorded at {now.strftime('%I:%M %p')}.",
                     checkin_at=now.strftime("%I:%M %p"), status=record.status,
+                    branch=user_branch,
                     distance_meters=round(distance) if distance is not None else None), 201
 
 
@@ -1066,7 +1155,15 @@ def check_out():
     coordinates = parse_coordinates(payload)
     if not coordinates:
         return jsonify(ok=False, message="Valid GPS coordinates are required. Allow location access and try again."), 400
-    distance, fence_error = geofence_error(coordinates)
+    now = now_ist()
+    record = Attendance.query.filter_by(user_id=current_user.id, attendance_date=now.date()).first()
+    if not record:
+        return jsonify(ok=False, message="Check in before checking out."), 409
+    if record.checkout_at:
+        return jsonify(ok=False, message="You have already checked out today."), 409
+
+    branch_to_check = record.branch or getattr(current_user, "branch", None) or DEFAULT_BRANCH
+    distance, fence_error = geofence_error(coordinates, branch=branch_to_check)
     if fence_error:
         return fence_error
     now = now_ist()
@@ -1318,6 +1415,7 @@ def employees():
     search = request.args.get("q", "").strip()
     role = request.args.get("role", "").strip()
     selected_status = request.args.get("status", "active").strip().lower()
+    selected_branch = request.args.get("branch", "").strip()
     if current_user.role == "admin":
         if selected_status == "disabled":
             base_query = User.query.filter(User.active.is_(False))
@@ -1331,6 +1429,8 @@ def employees():
         selected_status = "active"
         base_query = User.query.filter(User.active.is_(True))
     query = team_query(base_query)
+    if selected_branch in BRANCH_CHOICES:
+        query = query.filter(User.branch == selected_branch)
     if search:
         needle = f"%{search}%"
         query = query.filter(or_(
@@ -1343,7 +1443,8 @@ def employees():
         query = query.filter(User.role == role)
     employee_rows = query.order_by(User.full_name.asc()).all()
     return render_template("employees.html", employees=employee_rows, search=search,
-                           selected_role=role, selected_status=selected_status)
+                           selected_role=role, selected_status=selected_status,
+                           selected_branch=selected_branch, branches=BRANCH_CHOICES)
 
 
 def _new_system_employee_id() -> str:
@@ -1368,6 +1469,9 @@ def validate_employee_form(form, existing=None):
     full_name = form.get("full_name", "").strip()
     supplied_email = form.get("email", "").strip().lower()
     phone = form.get("phone", "").strip()
+    branch = form.get("branch", "").strip() or (existing.branch if existing else DEFAULT_BRANCH)
+    if branch not in BRANCH_CHOICES:
+        branch = DEFAULT_BRANCH
     department = form.get("department", "").strip()
     job_title = form.get("job_title", "").strip()
     shift_timing = form.get("shift_timing", "").strip() or "10:00 AM - 07:00 PM"
@@ -1458,6 +1562,7 @@ def validate_employee_form(form, existing=None):
         "full_name": full_name,
         "email": email,
         "phone": phone or (existing.phone if existing else ""),
+        "branch": branch,
         "shift_timing": shift_timing,
         "email_provided": bool(supplied_email),
         "employee_id_provided": bool(supplied_employee_id),
@@ -1477,7 +1582,7 @@ def employee_new():
             flash(error, "danger")
         else:
             user = User(employee_id=values["employee_id"], full_name=values["full_name"],
-                        email=values["email"], phone=values["phone"],
+                        email=values["email"], phone=values["phone"], branch=values["branch"],
                         shift_timing=values["shift_timing"], department=values["department"],
                         job_title=values["job_title"], role=values["role"], active=True)
             user.set_password(values["password"])
@@ -1486,7 +1591,7 @@ def employee_new():
             if user.role == "employee":
                 contact_msg = f"Phone: {user.phone}" if user.phone else f"Login ID: {user.employee_id}"
                 flash(
-                    f"Account for {user.full_name} was created. Employee login ID: {user.employee_id}. {contact_msg}. "
+                    f"Account for {user.full_name} was created ({user.branch}). Employee login ID: {user.employee_id}. {contact_msg}. "
                     f"Shift timing: {user.shift_timing}. "
                     "They can sign in at Employee Login using their phone number, full name, or assigned login ID and the temporary password. "
                     "Share the password securely.",
@@ -1494,12 +1599,12 @@ def employee_new():
                 )
             else:
                 flash(
-                    f"Account for {user.full_name} was created. They must sign in using their registered work email and password. "
+                    f"Account for {user.full_name} was created ({user.branch}). They must sign in using their registered work email and password. "
                     "Share the password securely.",
                     "success",
                 )
             return redirect(url_for("employees"))
-    return render_template("employee_form.html", employee=None, recent_attendance=[], today=now_ist().date())
+    return render_template("employee_form.html", employee=None, branches=BRANCH_CHOICES, recent_attendance=[], today=now_ist().date())
 
 
 @app.route("/employees/<int:user_id>/edit", methods=["GET", "POST"])
@@ -1517,6 +1622,7 @@ def employee_edit(user_id: int):
             employee.full_name = values["full_name"]
             employee.email = values["email"]
             employee.phone = values["phone"]
+            employee.branch = values["branch"]
             employee.shift_timing = values["shift_timing"]
             employee.department = values["department"]
             employee.job_title = values["job_title"]
@@ -1524,7 +1630,7 @@ def employee_edit(user_id: int):
             if values["password"]:
                 employee.set_password(values["password"])
             db.session.commit()
-            flash(f"Employee {employee.employee_id} was updated.", "success")
+            flash(f"Employee {employee.employee_id} ({employee.branch}) was updated.", "success")
             return redirect(url_for("employees"))
     recent_attendance = (
         Attendance.query.filter_by(user_id=employee.id)
@@ -1535,6 +1641,7 @@ def employee_edit(user_id: int):
     return render_template(
         "employee_form.html",
         employee=employee,
+        branches=BRANCH_CHOICES,
         recent_attendance=recent_attendance,
         today=now_ist().date(),
     )
@@ -2047,6 +2154,27 @@ def bad_request(error):
 def internal_server_error(error):
     app.logger.error(f"Internal server error: {error}", exc_info=True)
     return render_template("errors/500.html"), 500
+
+
+@app.route("/manifest.json")
+def pwa_manifest():
+    """Serve the Progressive Web App manifest at root scope."""
+    return send_file(
+        BASE_DIR / "static" / "manifest.json",
+        mimetype="application/manifest+json",
+    )
+
+
+@app.route("/sw.js")
+def pwa_service_worker():
+    """Serve the PWA service worker at root scope with no-cache headers."""
+    response = make_response(send_file(
+        BASE_DIR / "static" / "sw.js",
+        mimetype="application/javascript",
+    ))
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Service-Worker-Allowed"] = "/"
+    return response
 
 
 @app.route("/health")

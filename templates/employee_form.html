@@ -33,6 +33,7 @@
         {% set selected_department = request.form.get('department', employee.department if employee else '') %}
         {% set selected_role = request.form.get('role', employee.role if employee else '') %}
         {% set current_shift = request.form.get('shift_timing', employee.shift_timing if employee else '10:00 AM - 07:00 PM') %}
+        {% set selected_branch = request.form.get('branch', employee.branch if employee else 'Tumkur (Satyamangala)') %}
         <div class="form-grid">
           <div class="form-field">
             <label for="employee_id">Employee ID <span class="table-secondary">({{ 'Current ID' if employee else 'Automatically generated' }})</span></label>
@@ -61,6 +62,15 @@
                    value="{{ request.form.get('email', (employee.email if employee and not employee.email.endswith('@no-email.invalid') else '')) }}"
                    placeholder="name@company.com" autocomplete="email">
             <small id="email_help">Required for Admin and Manager accounts to sign in.</small>
+          </div>
+          <div class="form-field">
+            <label for="branch">Office branch *</label>
+            <select id="branch" name="branch" required>
+              {% for b in ['Tumkur (Satyamangala)', 'Bangalore (Whitefield)'] %}
+              <option value="{{ b }}" {% if selected_branch == b %}selected{% endif %}>{{ b }}</option>
+              {% endfor %}
+            </select>
+            <small>Office location where this staff member is assigned.</small>
           </div>
           <div class="form-field">
             <label for="shift_timing">Shift timing *</label>
