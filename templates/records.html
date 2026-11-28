@@ -20,6 +20,14 @@
     <div class="search-box"><i class="bi bi-search"></i><input type="search" name="q" value="{{ search }}" placeholder="Search employee or ID" aria-label="Search attendance records"></div>
     <div class="date-filter"><label for="start">From</label><input type="date" id="start" name="start" value="{{ start_date.isoformat() if start_date else '' }}"></div>
     <div class="date-filter"><label for="end">To</label><input type="date" id="end" name="end" value="{{ end_date.isoformat() if end_date else '' }}"></div>
+    {% if current_user.role == 'admin' %}
+    <select name="branch" aria-label="Filter by branch">
+      <option value="">All branches</option>
+      {% for b in branches %}
+      <option value="{{ b }}" {% if selected_branch == b %}selected{% endif %}>{{ b }}</option>
+      {% endfor %}
+    </select>
+    {% endif %}
     {% if current_user.role in ['admin','manager'] %}
     <select name="employee" aria-label="Filter by employee">
       <option value="">All employees</option>

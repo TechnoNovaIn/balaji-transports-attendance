@@ -111,12 +111,14 @@
 <div class="page-heading heading-with-action">
   <div><div class="eyebrow"><span></span> {{ current_user.role|upper }} WORKSPACE</div><h1>Good {{ 'morning' if now.strftime('%H')|int < 12 else ('afternoon' if now.strftime('%H')|int < 17 else 'evening') }}, {{ current_user.full_name.split()[0] }}<span class="heading-period">.</span></h1><p>Here's what's happening with your workforce today.</p></div>
   <form method="get" class="date-picker-form" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    {% if current_user.role == 'admin' %}
     <select name="branch" onchange="this.form.submit()" aria-label="Filter by branch" style="padding:6px 10px;border-radius:6px;border:1px solid #d5dbe5;font-size:12px;color:#182642;background:#fff;font-weight:600">
       <option value="">🏢 All Branches</option>
       {% for b in branches %}
       <option value="{{ b }}" {% if selected_branch == b %}selected{% endif %}>{{ b }}</option>
       {% endfor %}
     </select>
+    {% endif %}
     <label for="dashboard-date"><i class="bi bi-calendar3"></i> Date</label>
     <input id="dashboard-date" type="date" name="date" value="{{ data.selected_date.isoformat() }}" max="{{ today.isoformat() }}">
     <button type="submit" class="btn btn-outline btn-sm">Apply</button>
@@ -130,7 +132,7 @@
     </div>
     <div class="kpi-value">{{ data.total_employees }}</div>
     <div class="kpi-foot">
-      <span class="kpi-dot dot-indigo"></span>{{ current_user.department if current_user.role == 'manager' else 'Across the organization' }}
+      <span class="kpi-dot dot-indigo"></span>{{ current_user.branch if current_user.role == 'manager' else (selected_branch or 'Across the organization') }}
       <span class="kpi-click-badge"><i class="bi bi-arrow-up-right"></i> View</span>
     </div>
   </article>

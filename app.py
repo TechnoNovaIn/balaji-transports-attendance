@@ -350,81 +350,123 @@ class Attendance(db.Model):
 
 
 def seed_initial_accounts():
-    """Create default admin account (other demo accounts are disabled by default)."""
-    demo_users = [
-        {"employee_id": "BW-1001", "full_name": "Dhyan", "email": "admin@balaji.demo", "phone": "9876500001", "role": "admin", "department": "Finance", "job_title": "System Administrator", "shift_timing": "10:00 AM - 07:00 PM", "branch": "Tumkur (Satyamangala)", "active": True},
-        {"employee_id": "BW-1002", "full_name": "Rohan Shetty", "email": "manager@balaji.demo", "phone": "9876500002", "role": "manager", "department": "Tally", "job_title": "Department Manager", "shift_timing": "10:00 AM - 07:00 PM", "branch": "Tumkur (Satyamangala)", "active": False},
-        {"employee_id": "BW-1003", "full_name": "Kiran Kumar", "email": "kiran@balaji.demo", "phone": "9876500003", "role": "employee", "department": "Operations", "job_title": "Operations Lead", "shift_timing": "10:00 AM - 07:00 PM", "branch": "Tumkur (Satyamangala)", "active": False},
-        {"employee_id": "BW-1004", "full_name": "Suresh Patil", "email": "driver@balaji.demo", "phone": "9876500004", "role": "employee", "department": "Operations", "job_title": "Vehicle Driver", "shift_timing": "10:00 AM - 07:00 PM", "branch": "Tumkur (Satyamangala)", "active": False},
-        {"employee_id": "BW-1005", "full_name": "Pooja Nayak", "email": "staff@balaji.demo", "phone": "9876500005", "role": "employee", "department": "Operations", "job_title": "Dispatch Coordinator", "shift_timing": "10:00 AM - 07:00 PM", "branch": "Tumkur (Satyamangala)", "active": False},
-    ]
-    for udata in demo_users:
-        if not User.query.filter_by(email=udata["email"]).first():
-            user = User(
-                employee_id=udata["employee_id"],
-                full_name=udata["full_name"],
-                email=udata["email"],
-                phone=udata["phone"],
-                branch=udata.get("branch", DEFAULT_BRANCH),
-                role=udata["role"],
-                department=udata["department"],
-                job_title=udata["job_title"],
-                shift_timing=udata["shift_timing"],
-                active=udata["active"],
+    """Bootstrap the initial admin account from INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD."""
+    is_production = os.environ.get("FLASK_ENV", env_name).lower() == "production"
+    admin_email = (os.environ.get("INITIAL_ADMIN_EMAIL") or "admin@balaji.demo").strip().lower()
+    admin_password = (os.environ.get("INITIAL_ADMIN_PASSWORD") or "").strip()
+
+    if not admin_password:
+        if is_production:
+            app.logger.warning(
+                "INITIAL_ADMIN_PASSWORD is not set in production; skipping initial admin seeding. "
+                "Set INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD to create the first admin account."
             )
-            user.set_password("DemoPass123!")
-            db.session.add(user)
+        else:
+            app.logger.info(
+                "INITIAL_ADMIN_PASSWORD is not set; skipping automatic initial admin seeding."
+            )
+        return
+
+    if not User.query.filter_by(email=admin_email).first():
+        user = User(
+            employee_id="BW-1001",
+            full_name="Administrator",
+            email=admin_email,
+            phone="9876500001",
+            branch=DEFAULT_BRANCH,
+            role="admin",
+            department="Finance",
+            job_title="System Administrator",
+            shift_timing="10:00 AM - 07:00 PM",
+            active=True,
+        )
+        user.set_password(admin_password)
+        db.session.add(user)
+        try:
+            db.session.commit()
+        except Exception as exc:
+            db.session.rollback()
+            app.logger.warning(f"Could not commit initial admin account: {exc}")
+
+
+def _acquire_schema_lock():
+    """Acquire an inter-process lock file on POSIX/Linux to serialize Gunicorn worker schema init."""
+    lock_path = Path(app.instance_path) / ".schema_init.lock"
     try:
-        db.session.commit()
-    except Exception as e:
-        db.session.rollback()
-        app.logger.warning(f"Could not commit initial demo accounts: {e}")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_file = open(lock_path, "a+")
+        try:
+            import fcntl
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        except ImportError:
+            pass
+        return lock_file
+    except Exception:
+        return None
+
+
+def _release_schema_lock(lock_file):
+    if lock_file is None:
+        return
+    try:
+        import fcntl
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    except Exception:
+        pass
+    try:
+        lock_file.close()
+    except Exception:
+        pass
 
 
 def ensure_db_schema():
     """Ensure database tables and columns exist for existing databases without deleting records."""
-    with app.app_context():
-        try:
-            db.create_all()
-            # Only execute SQLite-specific schema introspection PRAGMAs on SQLite databases
-            if db.engine.dialect.name == "sqlite":
-                with db.engine.connect() as conn:
-                    res = conn.execute(db.text("PRAGMA table_info(users)")).fetchall()
-                    cols = {r[1] for r in res}
-                    if "phone" not in cols:
-                        conn.execute(db.text("ALTER TABLE users ADD COLUMN phone VARCHAR(30)"))
-                    if "shift_timing" not in cols:
-                        conn.execute(db.text("ALTER TABLE users ADD COLUMN shift_timing VARCHAR(40) DEFAULT '10:00 AM - 07:00 PM'"))
-                    if "branch" not in cols:
-                        conn.execute(db.text("ALTER TABLE users ADD COLUMN branch VARCHAR(80) DEFAULT 'Tumkur (Satyamangala)'"))
+    lock_file = _acquire_schema_lock()
+    try:
+        with app.app_context():
+            try:
+                db.create_all()
+                # Only execute SQLite-specific schema introspection PRAGMAs on SQLite databases
+                if db.engine.dialect.name == "sqlite":
+                    with db.engine.connect() as conn:
+                        res = conn.execute(db.text("PRAGMA table_info(users)")).fetchall()
+                        cols = {r[1] for r in res}
+                        if "phone" not in cols:
+                            conn.execute(db.text("ALTER TABLE users ADD COLUMN phone VARCHAR(30)"))
+                        if "shift_timing" not in cols:
+                            conn.execute(db.text("ALTER TABLE users ADD COLUMN shift_timing VARCHAR(40) DEFAULT '10:00 AM - 07:00 PM'"))
+                        if "branch" not in cols:
+                            conn.execute(db.text("ALTER TABLE users ADD COLUMN branch VARCHAR(80) DEFAULT 'Tumkur (Satyamangala)'"))
 
-                    att_res = conn.execute(db.text("PRAGMA table_info(attendance)")).fetchall()
-                    att_cols = {r[1] for r in att_res}
-                    if "break_start_at" not in att_cols:
-                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN break_start_at DATETIME"))
-                    if "break_end_at" not in att_cols:
-                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN break_end_at DATETIME"))
-                    if "exception_granted" not in att_cols:
-                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN exception_granted BOOLEAN DEFAULT 0"))
-                    if "marked_by_admin" not in att_cols:
-                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN marked_by_admin BOOLEAN DEFAULT 0"))
-                    if "admin_note" not in att_cols:
-                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN admin_note VARCHAR(255)"))
-                    if "checkin_accuracy" not in att_cols:
-                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN checkin_accuracy FLOAT"))
-                    if "checkout_accuracy" not in att_cols:
-                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN checkout_accuracy FLOAT"))
-                    if "total_break_seconds" not in att_cols:
-                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN total_break_seconds INTEGER DEFAULT 0"))
-                    if "branch" not in att_cols:
-                        conn.execute(db.text("ALTER TABLE attendance ADD COLUMN branch VARCHAR(80)"))
-                    conn.commit()
+                        att_res = conn.execute(db.text("PRAGMA table_info(attendance)")).fetchall()
+                        att_cols = {r[1] for r in att_res}
+                        if "break_start_at" not in att_cols:
+                            conn.execute(db.text("ALTER TABLE attendance ADD COLUMN break_start_at DATETIME"))
+                        if "break_end_at" not in att_cols:
+                            conn.execute(db.text("ALTER TABLE attendance ADD COLUMN break_end_at DATETIME"))
+                        if "exception_granted" not in att_cols:
+                            conn.execute(db.text("ALTER TABLE attendance ADD COLUMN exception_granted BOOLEAN DEFAULT 0"))
+                        if "marked_by_admin" not in att_cols:
+                            conn.execute(db.text("ALTER TABLE attendance ADD COLUMN marked_by_admin BOOLEAN DEFAULT 0"))
+                        if "admin_note" not in att_cols:
+                            conn.execute(db.text("ALTER TABLE attendance ADD COLUMN admin_note VARCHAR(255)"))
+                        if "checkin_accuracy" not in att_cols:
+                            conn.execute(db.text("ALTER TABLE attendance ADD COLUMN checkin_accuracy FLOAT"))
+                        if "checkout_accuracy" not in att_cols:
+                            conn.execute(db.text("ALTER TABLE attendance ADD COLUMN checkout_accuracy FLOAT"))
+                        if "total_break_seconds" not in att_cols:
+                            conn.execute(db.text("ALTER TABLE attendance ADD COLUMN total_break_seconds INTEGER DEFAULT 0"))
+                        if "branch" not in att_cols:
+                            conn.execute(db.text("ALTER TABLE attendance ADD COLUMN branch VARCHAR(80)"))
+                        conn.commit()
 
-            # Seed demo workforce accounts if database is empty
-            if not User.query.filter_by(role="admin").first():
-                seed_initial_accounts()
-        except Exception as exc:
-            app.logger.warning(f"Database schema inspection note: {exc}")
+                # Seed initial admin account if database has no admin yet
+                if not User.query.filter_by(role="admin").first():
+                    seed_initial_accounts()
+            except Exception as exc:
+                app.logger.warning(f"Database schema inspection note: {exc}")
+    finally:
+        _release_schema_lock(lock_file)
 
 
 ensure_db_schema()
@@ -480,14 +522,14 @@ def roles_required(*roles: str):
 def team_query(query=None):
     query = query if query is not None else User.query
     if current_user.role == "manager":
-        query = query.filter(User.department == current_user.department)
+        query = query.filter(User.branch == current_user.branch)
     return query
 
 
 def attendance_query(query=None):
     query = query if query is not None else Attendance.query.join(User)
     if current_user.role == "manager":
-        query = query.filter(User.department == current_user.department)
+        query = query.filter(User.branch == current_user.branch)
     elif current_user.role == "employee":
         query = query.filter(Attendance.user_id == current_user.id)
     return query
@@ -506,7 +548,7 @@ def in_scope_user(user_id: int) -> User | None:
     user = db.session.get(User, user_id)
     if not user or not user.active:
         return None
-    if current_user.role == "manager" and user.department != current_user.department:
+    if current_user.role == "manager" and user.branch != current_user.branch:
         return None
     return user
 
@@ -520,7 +562,7 @@ def attendance_for_dashboard(selected_date: date, branch: str | None = None):
     if branch and branch in BRANCH_CHOICES:
         q = q.filter(User.branch == branch)
     if current_user.role == "manager":
-        q = q.filter(User.department == current_user.department)
+        q = q.filter(User.branch == current_user.branch)
     elif current_user.role == "employee":
         # Employees must never see other employees' attendance on their dashboard.
         q = q.filter(Attendance.user_id == current_user.id)
@@ -552,7 +594,7 @@ def dashboard_data(selected_date: date, branch: str | None = None) -> dict:
             if branch and branch in BRANCH_CHOICES:
                 trend_query = trend_query.filter(User.branch == branch)
             if current_user.role == "manager":
-                trend_query = trend_query.filter(User.department == current_user.department)
+                trend_query = trend_query.filter(User.branch == current_user.branch)
             total = trend_query.count()
         trend_dates.append({"label": day.strftime("%b %d"), "present": total})
 
@@ -901,7 +943,7 @@ def employee_login():
     return redirect(url_for("login"))
 
 
-@app.route("/logout", methods=["GET", "POST"])
+@app.post("/logout")
 def logout():
     if current_user.is_authenticated:
         logout_user()
@@ -921,6 +963,7 @@ def logout():
 
 @app.route("/download-apk")
 @app.route("/apk")
+@login_required
 def download_apk():
     """Allows workforce employees to download the latest Android APK directly over Wi-Fi without USB cables."""
     apk_candidates = []
@@ -1148,6 +1191,14 @@ def check_in():
                     distance_meters=round(distance) if distance is not None else None), 201
 
 
+def _close_active_break(record: Attendance, now: datetime) -> None:
+    """Close an in-progress break and accumulate its elapsed seconds onto the record."""
+    if record.break_in_progress:
+        delta_sec = max(1, int((now - record.break_start_at).total_seconds()))
+        record.total_break_seconds = (record.total_break_seconds or 0) + delta_sec
+        record.break_end_at = now
+
+
 @app.post("/api/attendance/check-out")
 @login_required
 def check_out():
@@ -1166,17 +1217,8 @@ def check_out():
     distance, fence_error = geofence_error(coordinates, branch=branch_to_check)
     if fence_error:
         return fence_error
-    now = now_ist()
-    record = Attendance.query.filter_by(user_id=current_user.id, attendance_date=now.date()).first()
-    if not record:
-        return jsonify(ok=False, message="Check in before checking out."), 409
-    if record.checkout_at:
-        return jsonify(ok=False, message="You have already checked out today."), 409
     latitude, longitude, accuracy = coordinates
-    if record.break_in_progress:
-        delta_sec = max(1, int((now - record.break_start_at).total_seconds()))
-        record.total_break_seconds = (record.total_break_seconds or 0) + delta_sec
-        record.break_end_at = now
+    _close_active_break(record, now)
     record.checkout_at = now
     record.checkout_latitude = latitude
     record.checkout_longitude = longitude
@@ -1259,7 +1301,7 @@ def grant_attendance_exception(record_id: int):
     record = db.session.get(Attendance, record_id)
     if not record:
         abort(404)
-    if current_user.role == "manager" and record.user.department != current_user.department:
+    if current_user.role == "manager" and record.user.branch != current_user.branch:
         abort(403)
     record.exception_granted = True
     db.session.commit()
@@ -1267,79 +1309,53 @@ def grant_attendance_exception(record_id: int):
     return redirect(request.referrer or url_for("records"))
 
 
-@app.post("/attendance/manual-mark")
-@roles_required("admin", "manager")
-def manual_mark_attendance():
-    """Admin candidate-wise resolution: mark attendance for employees facing phone issues or outages."""
-    user_id_raw = request.form.get("user_id", "").strip()
-    date_str = request.form.get("attendance_date", "").strip()
-    checkin_time_str = request.form.get("checkin_time", "").strip()
-    checkout_time_str = request.form.get("checkout_time", "").strip()
-    include_break = request.form.get("include_break") in {"1", "true", "on", "yes"}
-    grant_exception = request.form.get("grant_exception") in {"1", "true", "on", "yes"}
-    issue_reason = request.form.get("issue_reason", "").strip()
-    custom_note = request.form.get("admin_note", "").strip()
+def _parse_hhmm(value: str | None, fallback: time | None = None) -> time | None:
+    if not value:
+        return fallback
+    try:
+        parts = [int(p) for p in value.strip().split(":")[:2]]
+        return time(parts[0], parts[1])
+    except Exception:
+        return fallback
+
+
+def _upsert_admin_attendance(candidate: User, form, action_prefix: str = "Attendance recorded") -> tuple[bool, str]:
+    """Validate and create/update an attendance record for an employee on behalf of an admin/manager."""
+    date_str = form.get("attendance_date", "").strip()
+    checkin_time_str = form.get("checkin_time", "").strip()
+    checkout_time_str = form.get("checkout_time", "").strip()
+    include_break = form.get("include_break") in {"1", "true", "on", "yes"}
+    grant_exception = form.get("grant_exception") in {"1", "true", "on", "yes"}
+    issue_reason = form.get("issue_reason", "").strip()
+    custom_note = form.get("admin_note", "").strip()
 
     admin_note = custom_note or issue_reason or "Resolved by admin (phone broken / switched off / device issue)"
-
-    try:
-        user_id = int(user_id_raw)
-    except (ValueError, TypeError):
-        flash("Please select a candidate employee.", "danger")
-        return redirect(url_for("records"))
-
-    candidate = db.session.get(User, user_id)
-    if not candidate:
-        flash("Candidate employee record not found.", "danger")
-        return redirect(url_for("records"))
-    if current_user.role == "manager" and candidate.department != current_user.department:
-        abort(403)
-
     target_date = parse_date(date_str, now_ist().date()) or now_ist().date()
 
-    # Parse check-in time
-    try:
-        if checkin_time_str:
-            parts = [int(p) for p in checkin_time_str.split(":")[:2]]
-            cin_time = time(parts[0], parts[1])
-        else:
-            cin_time = time(10, 0)
-    except Exception:
-        cin_time = time(10, 0)
+    cin_time = _parse_hhmm(checkin_time_str, time(10, 0))
     checkin_dt = datetime.combine(target_date, cin_time)
 
-    # Parse check-out time
-    checkout_dt = None
-    if checkout_time_str:
-        try:
-            parts = [int(p) for p in checkout_time_str.split(":")[:2]]
-            cout_time = time(parts[0], parts[1])
-            checkout_dt = datetime.combine(target_date, cout_time)
-        except Exception:
-            checkout_dt = None
+    cout_time = _parse_hhmm(checkout_time_str) if checkout_time_str else None
+    checkout_dt = datetime.combine(target_date, cout_time) if cout_time else None
 
-    # Parse 1-hour break buffer
+    if checkout_dt is not None and checkout_dt <= checkin_dt:
+        return False, "Check-out time must be after check-in time."
+
     break_start_dt = None
     break_end_dt = None
     if include_break:
-        b_start_str = request.form.get("break_start_time", "13:00").strip()
-        b_end_str = request.form.get("break_end_time", "14:00").strip()
-        try:
-            sp = [int(p) for p in b_start_str.split(":")[:2]]
-            break_start_dt = datetime.combine(target_date, time(sp[0], sp[1]))
-        except Exception:
-            break_start_dt = datetime.combine(target_date, time(13, 0))
-        try:
-            ep = [int(p) for p in b_end_str.split(":")[:2]]
-            break_end_dt = datetime.combine(target_date, time(ep[0], ep[1]))
-        except Exception:
-            break_end_dt = datetime.combine(target_date, time(14, 0))
+        b_start_time = _parse_hhmm(form.get("break_start_time", "13:00"), time(13, 0))
+        b_end_time = _parse_hhmm(form.get("break_end_time", "14:00"), time(14, 0))
+        break_start_dt = datetime.combine(target_date, b_start_time)
+        break_end_dt = datetime.combine(target_date, b_end_time)
+        if break_end_dt <= break_start_dt:
+            return False, "Break end time must be after break start time."
 
-    fence = configured_geofence()
+    branch_name = candidate.branch or DEFAULT_BRANCH
+    fence = configured_geofence(branch=branch_name)
     lat = fence[0] if fence else 12.9716
     lon = fence[1] if fence else 77.5946
 
-    # Update existing attendance or create new
     record = Attendance.query.filter_by(user_id=candidate.id, attendance_date=target_date).first()
     if record:
         record.checkin_at = checkin_dt
@@ -1350,8 +1366,7 @@ def manual_mark_attendance():
         if include_break:
             record.break_start_at = break_start_dt
             record.break_end_at = break_end_dt
-            if break_start_dt and break_end_dt:
-                record.total_break_seconds = max(0, int((break_end_dt - break_start_dt).total_seconds()))
+            record.total_break_seconds = max(0, int((break_end_dt - break_start_dt).total_seconds()))
         else:
             record.break_start_at = None
             record.break_end_at = None
@@ -1360,6 +1375,8 @@ def manual_mark_attendance():
             record.exception_granted = True
         record.marked_by_admin = True
         record.admin_note = admin_note
+        if not record.branch:
+            record.branch = branch_name
     else:
         record = Attendance(
             user_id=candidate.id,
@@ -1376,11 +1393,40 @@ def manual_mark_attendance():
             exception_granted=grant_exception,
             marked_by_admin=True,
             admin_note=admin_note,
+            branch=branch_name,
         )
         db.session.add(record)
 
-    db.session.commit()
-    flash(f"Attendance recorded for {candidate.full_name}. Issue resolved: {admin_note}", "success")
+    try:
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        app.logger.error(f"Failed to commit admin attendance for user {candidate.id}: {exc}")
+        return False, "Attendance record could not be saved. Please try again."
+
+    return True, f"{action_prefix} for {candidate.full_name} ({target_date.strftime('%d %b %Y')}). Reason logged: {admin_note}"
+
+
+@app.post("/attendance/manual-mark")
+@roles_required("admin", "manager")
+def manual_mark_attendance():
+    """Admin candidate-wise resolution: mark attendance for employees facing phone issues or outages."""
+    user_id_raw = request.form.get("user_id", "").strip()
+    try:
+        user_id = int(user_id_raw)
+    except (ValueError, TypeError):
+        flash("Please select a candidate employee.", "danger")
+        return redirect(url_for("records"))
+
+    candidate = db.session.get(User, user_id)
+    if not candidate:
+        flash("Candidate employee record not found.", "danger")
+        return redirect(url_for("records"))
+    if current_user.role == "manager" and candidate.branch != current_user.branch:
+        abort(403)
+
+    ok, message = _upsert_admin_attendance(candidate, request.form)
+    flash(message, "success" if ok else "danger")
     return redirect(url_for("records"))
 
 
@@ -1391,20 +1437,28 @@ def quick_checkout(record_id: int):
     record = db.session.get(Attendance, record_id)
     if not record:
         abort(404)
-    if current_user.role == "manager" and record.user.department != current_user.department:
+    if current_user.role == "manager" and record.user.branch != current_user.branch:
         abort(403)
-    fence = configured_geofence()
+    branch_name = record.branch or record.user.branch or DEFAULT_BRANCH
+    fence = configured_geofence(branch=branch_name)
     lat = fence[0] if fence else 12.9716
     lon = fence[1] if fence else 77.5946
 
     now = now_ist()
+    _close_active_break(record, now)
     record.checkout_at = now
     record.checkout_latitude = lat
     record.checkout_longitude = lon
     record.marked_by_admin = True
     if not record.admin_note:
         record.admin_note = "Check-out marked by admin (phone offline / battery dead)"
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        app.logger.error(f"Failed to commit quick-checkout for record {record.id}: {exc}")
+        flash("Check-out could not be saved. Please try again.", "danger")
+        return redirect(request.referrer or url_for("records"))
     flash(f"Check-out recorded for candidate {record.user.full_name}.", "success")
     return redirect(request.referrer or url_for("records"))
 
@@ -1655,98 +1709,8 @@ def resolve_employee_issue(user_id: int):
     if not candidate:
         abort(404)
 
-    date_str = request.form.get("attendance_date", "").strip()
-    checkin_time_str = request.form.get("checkin_time", "").strip()
-    checkout_time_str = request.form.get("checkout_time", "").strip()
-    include_break = request.form.get("include_break") in {"1", "true", "on", "yes"}
-    grant_exception = request.form.get("grant_exception") in {"1", "true", "on", "yes"}
-    issue_reason = request.form.get("issue_reason", "").strip()
-    custom_note = request.form.get("admin_note", "").strip()
-
-    admin_note = custom_note or issue_reason or "Resolved by admin (phone broken / switched off / device issue)"
-    target_date = parse_date(date_str, now_ist().date()) or now_ist().date()
-
-    try:
-        if checkin_time_str:
-            parts = [int(p) for p in checkin_time_str.split(":")[:2]]
-            cin_time = time(parts[0], parts[1])
-        else:
-            cin_time = time(10, 0)
-    except Exception:
-        cin_time = time(10, 0)
-    checkin_dt = datetime.combine(target_date, cin_time)
-
-    checkout_dt = None
-    if checkout_time_str:
-        try:
-            parts = [int(p) for p in checkout_time_str.split(":")[:2]]
-            cout_time = time(parts[0], parts[1])
-            checkout_dt = datetime.combine(target_date, cout_time)
-        except Exception:
-            checkout_dt = None
-
-    break_start_dt = None
-    break_end_dt = None
-    if include_break:
-        b_start_str = request.form.get("break_start_time", "13:00").strip()
-        b_end_str = request.form.get("break_end_time", "14:00").strip()
-        try:
-            sp = [int(p) for p in b_start_str.split(":")[:2]]
-            break_start_dt = datetime.combine(target_date, time(sp[0], sp[1]))
-        except Exception:
-            break_start_dt = datetime.combine(target_date, time(13, 0))
-        try:
-            ep = [int(p) for p in b_end_str.split(":")[:2]]
-            break_end_dt = datetime.combine(target_date, time(ep[0], ep[1]))
-        except Exception:
-            break_end_dt = datetime.combine(target_date, time(14, 0))
-
-    fence = configured_geofence()
-    lat = fence[0] if fence else 12.9716
-    lon = fence[1] if fence else 77.5946
-
-    record = Attendance.query.filter_by(user_id=candidate.id, attendance_date=target_date).first()
-    if record:
-        record.checkin_at = checkin_dt
-        if checkout_dt:
-            record.checkout_at = checkout_dt
-            record.checkout_latitude = lat
-            record.checkout_longitude = lon
-        if include_break:
-            record.break_start_at = break_start_dt
-            record.break_end_at = break_end_dt
-            if break_start_dt and break_end_dt:
-                record.total_break_seconds = max(0, int((break_end_dt - break_start_dt).total_seconds()))
-        else:
-            record.break_start_at = None
-            record.break_end_at = None
-            record.total_break_seconds = 0
-        if grant_exception:
-            record.exception_granted = True
-        record.marked_by_admin = True
-        record.admin_note = admin_note
-    else:
-        
-        record = Attendance(
-            user_id=candidate.id,
-            attendance_date=target_date,
-            checkin_at=checkin_dt,
-            checkout_at=checkout_dt,
-            checkin_latitude=lat,
-            checkin_longitude=lon,
-            checkout_latitude=lat if checkout_dt else None,
-            checkout_longitude=lon if checkout_dt else None,
-            break_start_at=break_start_dt,
-            break_end_at=break_end_dt,
-            total_break_seconds=max(0, int((break_end_dt - break_start_dt).total_seconds())) if (include_break and break_start_dt and break_end_dt) else 0,
-            exception_granted=grant_exception,
-            marked_by_admin=True,
-            admin_note=admin_note,
-        )
-        db.session.add(record)
-
-    db.session.commit()
-    flash(f"Attendance grievance resolved for {candidate.full_name} ({target_date.strftime('%d %b %Y')}). Reason logged: {admin_note}", "success")
+    ok, message = _upsert_admin_attendance(candidate, request.form, action_prefix="Attendance grievance resolved")
+    flash(message, "success" if ok else "danger")
     return redirect(url_for("employee_edit", user_id=candidate.id))
 
 
@@ -1783,6 +1747,11 @@ def filtered_attendance_query():
     end_date = parse_date(request.args.get("end"))
     employee_id = request.args.get("employee", "").strip()
     search = request.args.get("q", "").strip()
+    branch = request.args.get("branch", "").strip()
+    if current_user.role == "admin" and branch in BRANCH_CHOICES:
+        query = query.filter(User.branch == branch)
+    else:
+        branch = ""
     if start_date:
         query = query.filter(Attendance.attendance_date >= start_date)
     if end_date:
@@ -1792,17 +1761,18 @@ def filtered_attendance_query():
     if search:
         needle = f"%{search}%"
         query = query.filter(or_(User.full_name.ilike(needle), User.employee_id.ilike(needle)))
-    return query.order_by(Attendance.attendance_date.desc(), Attendance.checkin_at.desc()), start_date, end_date, employee_id, search
+    return query.order_by(Attendance.attendance_date.desc(), Attendance.checkin_at.desc()), start_date, end_date, employee_id, search, branch
 
 
 @app.route("/records")
 @login_required
 def records():
-    query, start_date, end_date, employee_filter, search = filtered_attendance_query()
+    query, start_date, end_date, employee_filter, search, selected_branch = filtered_attendance_query()
     rows = query.limit(250).all()
     employee_rows = team_query(User.query.filter(User.active.is_(True))).order_by(User.full_name.asc()).all() if current_user.role in {"admin", "manager"} else []
     return render_template("records.html", records=rows, employees=employee_rows, start_date=start_date,
-                           end_date=end_date, employee_filter=employee_filter, search=search)
+                           end_date=end_date, employee_filter=employee_filter, search=search,
+                           selected_branch=selected_branch, branches=BRANCH_CHOICES)
 
 
 @app.route("/reports")
@@ -1812,9 +1782,16 @@ def reports():
     end_date = parse_date(request.args.get("end"), default_report_end_date()) or default_report_end_date()
     if start_date > end_date:
         start_date, end_date = end_date, start_date
-    roster = team_query(User.query.filter(User.active.is_(True))).all()
+    selected_branch = request.args.get("branch", "").strip()
+    if current_user.role != "admin" or selected_branch not in BRANCH_CHOICES:
+        selected_branch = ""
+    roster_q = team_query(User.query.filter(User.active.is_(True)))
     query = attendance_query(Attendance.query.join(User)).filter(Attendance.attendance_date >= start_date,
                                                                   Attendance.attendance_date <= end_date)
+    if selected_branch:
+        roster_q = roster_q.filter(User.branch == selected_branch)
+        query = query.filter(User.branch == selected_branch)
+    roster = roster_q.all()
     rows = query.order_by(Attendance.attendance_date.desc(), Attendance.checkin_at.desc()).all()
     worked_days = max(0, (end_date - start_date).days + 1)
     expected_workdays = sum(1 for offset in range(worked_days) if (start_date + timedelta(days=offset)).weekday() < 5)
@@ -1825,7 +1802,8 @@ def reports():
                                 "late": sum(1 for row in user_rows if row.status == "Late"),
                                 "expected": expected_workdays})
     return render_template("reports.html", rows=rows, summary=summary_by_user,
-                           start_date=start_date, end_date=end_date, total_records=len(rows))
+                           start_date=start_date, end_date=end_date, total_records=len(rows),
+                           selected_branch=selected_branch, branches=BRANCH_CHOICES)
 
 
 def attendance_export_values(record: Attendance):
@@ -1883,26 +1861,30 @@ def report_date_range():
     return start_date, end_date
 
 
-def report_attendance_rows(start_date: date, end_date: date):
+def report_attendance_rows(start_date: date, end_date: date, branch: str | None = None):
     query = attendance_query(Attendance.query.join(User)).filter(
         Attendance.attendance_date >= start_date,
         Attendance.attendance_date <= end_date,
     )
+    if current_user.role == "admin" and branch in BRANCH_CHOICES:
+        query = query.filter(User.branch == branch)
     return query.order_by(Attendance.attendance_date.desc(), Attendance.checkin_at.desc()).all()
 
 
 @app.route("/reports.csv")
 @roles_required("admin", "manager")
 def reports_csv():
-    """Export attendance as CSV in the required eight-column order."""
+    """Export attendance as CSV with Branch column."""
     start_date, end_date = report_date_range()
-    rows = report_attendance_rows(start_date, end_date)
+    branch = request.args.get("branch", "").strip()
+    rows = report_attendance_rows(start_date, end_date, branch=branch)
 
     output = io.StringIO(newline="")
     writer = csv.writer(output)
     writer.writerow([
         "Date",
         "Employee Name",
+        "Branch",
         "Department",
         "Role",
         "Login Status",
@@ -1916,6 +1898,7 @@ def reports_csv():
         writer.writerow([
             row.attendance_date.strftime("%d-%m-%Y"),
             row.user.full_name,
+            row.branch or row.user.branch or DEFAULT_BRANCH,
             row.user.department,
             row.user.role.title(),
             login_status,
@@ -1935,9 +1918,10 @@ def reports_csv():
 @app.route("/reports.xlsx")
 @roles_required("admin", "manager")
 def reports_xlsx():
-    """Export attendance as an eight-column Excel workbook with status colors."""
+    """Export attendance as a color-coded Excel workbook with Branch column."""
     start_date, end_date = report_date_range()
-    rows = report_attendance_rows(start_date, end_date)
+    branch = request.args.get("branch", "").strip()
+    rows = report_attendance_rows(start_date, end_date, branch=branch)
 
     output = io.BytesIO()
     workbook = xlsxwriter.Workbook(output, {"in_memory": True})
@@ -1976,6 +1960,7 @@ def reports_xlsx():
     headers = [
         "Date",
         "Employee Name",
+        "Branch",
         "Department",
         "Role",
         "Login Status",
@@ -1988,12 +1973,13 @@ def reports_xlsx():
 
     worksheet.set_column("A:A", 14)
     worksheet.set_column("B:B", 24)
-    worksheet.set_column("C:C", 22)
-    worksheet.set_column("D:D", 14)
-    worksheet.set_column("E:E", 16)
-    worksheet.set_column("F:F", 15)
+    worksheet.set_column("C:C", 24)
+    worksheet.set_column("D:D", 20)
+    worksheet.set_column("E:E", 14)
+    worksheet.set_column("F:F", 16)
     worksheet.set_column("G:G", 15)
-    worksheet.set_column("H:H", 18)
+    worksheet.set_column("H:H", 15)
+    worksheet.set_column("I:I", 18)
     worksheet.set_row(0, 24)
     worksheet.freeze_panes(1, 0)
 
@@ -2007,19 +1993,20 @@ def reports_xlsx():
             date_format,
         )
         worksheet.write_string(excel_row, 1, record.user.full_name)
-        worksheet.write_string(excel_row, 2, record.user.department)
-        worksheet.write_string(excel_row, 3, record.user.role.title())
+        worksheet.write_string(excel_row, 2, record.branch or record.user.branch or DEFAULT_BRANCH)
+        worksheet.write_string(excel_row, 3, record.user.department)
+        worksheet.write_string(excel_row, 4, record.user.role.title())
 
         login_format = normal_format if login_status == "Normal" else late_format
-        worksheet.write_string(excel_row, 4, login_status, login_format)
-        worksheet.write_datetime(excel_row, 5, login_time, time_format)
+        worksheet.write_string(excel_row, 5, login_status, login_format)
+        worksheet.write_datetime(excel_row, 6, login_time, time_format)
 
         if record.checkout_at is not None:
             worksheet.write_datetime(
-                excel_row, 6, record.checkout_at, time_format
+                excel_row, 7, record.checkout_at, time_format
             )
         else:
-            worksheet.write_blank(excel_row, 6, None)
+            worksheet.write_blank(excel_row, 7, None)
 
         logout_formats = {
             "On Time": on_time_format,
@@ -2028,7 +2015,7 @@ def reports_xlsx():
         # Blank status when no checkout was recorded. Do not fabricate a result.
         worksheet.write_string(
             excel_row,
-            7,
+            8,
             logout_status,
             logout_formats.get(logout_status),
         )
@@ -2047,7 +2034,7 @@ def reports_xlsx():
     return response
 
 
-def build_daily_owner_report(report_day: date) -> list[dict]:
+def build_daily_owner_report(report_day: date, branch: str | None = None) -> list[dict]:
     """Build a compact owner report for all active non-admin workforce accounts.
 
     Missing attendance on a past weekday is marked Absent. On today's report, an
@@ -2055,20 +2042,17 @@ def build_daily_owner_report(report_day: date) -> list[dict]:
     remains Pending and is never incorrectly marked On Time.
     """
     now = now_ist()
-    roster = (
-        User.query.filter(User.active.is_(True), User.role != "admin")
-        .order_by(User.full_name.asc())
-        .all()
+    roster_q = User.query.filter(User.active.is_(True), User.role != "admin")
+    att_q = Attendance.query.join(User).filter(
+        Attendance.attendance_date == report_day,
+        User.active.is_(True),
+        User.role != "admin",
     )
-    attendance = (
-        Attendance.query.join(User)
-        .filter(
-            Attendance.attendance_date == report_day,
-            User.active.is_(True),
-            User.role != "admin",
-        )
-        .all()
-    )
+    if branch and branch in BRANCH_CHOICES:
+        roster_q = roster_q.filter(User.branch == branch)
+        att_q = att_q.filter(User.branch == branch)
+    roster = roster_q.order_by(User.full_name.asc()).all()
+    attendance = att_q.all()
     by_user = {row.user_id: row for row in attendance}
     output = []
 
@@ -2090,6 +2074,7 @@ def build_daily_owner_report(report_day: date) -> list[dict]:
 
         output.append({
             "employee_name": user.full_name,
+            "branch": user.branch or DEFAULT_BRANCH,
             "login_status": login_status,
             "logout_status": logout_status,
         })
@@ -2101,11 +2086,16 @@ def build_daily_owner_report(report_day: date) -> list[dict]:
 def daily_owner_report():
     """Display a simple daily attendance summary for the owner/admin."""
     report_day = parse_date(request.args.get("date"), now_ist().date()) or now_ist().date()
-    rows = build_daily_owner_report(report_day)
+    selected_branch = request.args.get("branch", "").strip()
+    if selected_branch not in BRANCH_CHOICES:
+        selected_branch = ""
+    rows = build_daily_owner_report(report_day, branch=selected_branch or None)
     return render_template(
         "daily_report.html",
         report_day=report_day,
         rows=rows,
+        selected_branch=selected_branch,
+        branches=BRANCH_CHOICES,
         present_count=sum(row["login_status"] in {"Normal", "Late"} for row in rows),
         late_count=sum(row["login_status"] == "Late" for row in rows),
         absent_count=sum(row["login_status"] == "Absent" for row in rows),
@@ -2118,19 +2108,60 @@ def daily_owner_report():
 def daily_owner_report_csv():
     """Download the owner daily report as a compact CSV file."""
     report_day = parse_date(request.args.get("date"), now_ist().date()) or now_ist().date()
-    rows = build_daily_owner_report(report_day)
+    selected_branch = request.args.get("branch", "").strip()
+    if selected_branch not in BRANCH_CHOICES:
+        selected_branch = ""
+    rows = build_daily_owner_report(report_day, branch=selected_branch or None)
     output = io.StringIO(newline="")
     writer = csv.writer(output)
-    writer.writerow(["Employee Name", "Login Status", "Logout Status"])
+    writer.writerow(["Employee Name", "Branch", "Login Status", "Logout Status"])
     for row in rows:
         writer.writerow([
             row["employee_name"],
+            row["branch"],
             row["login_status"],
             row["logout_status"],
         ])
     response = make_response("\ufeff" + output.getvalue())
     response.headers["Content-Type"] = "text/csv; charset=utf-8"
     response.headers["Content-Disposition"] = f"attachment; filename=balaji-daily-attendance-{report_day}.csv"
+    return response
+
+
+@app.route("/admin/backup.sqlite3")
+@roles_required("admin")
+def download_sqlite_backup():
+    """Create a consistent WAL-safe SQLite snapshot and stream it to the administrator."""
+    if db.engine.dialect.name != "sqlite":
+        return jsonify(ok=False, message="Direct SQLite backup is only available for SQLite databases."), 400
+    import sqlite3
+    import tempfile
+
+    db_path = db.engine.url.database
+    if not db_path or db_path == ":memory:" or not os.path.exists(db_path):
+        return jsonify(ok=False, message="SQLite database file not found."), 404
+
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".sqlite3")
+    os.close(tmp_fd)
+    try:
+        src_conn = sqlite3.connect(db_path)
+        dst_conn = sqlite3.connect(tmp_path)
+        try:
+            src_conn.backup(dst_conn)
+        finally:
+            dst_conn.close()
+            src_conn.close()
+        with open(tmp_path, "rb") as f:
+            payload = f.read()
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+    stamp = now_ist().strftime("%Y-%m-%d_%H-%M")
+    response = make_response(payload)
+    response.headers["Content-Type"] = "application/x-sqlite3"
+    response.headers["Content-Disposition"] = f"attachment; filename=balaji-workforce-backup-{stamp}.sqlite3"
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     return response
 
 

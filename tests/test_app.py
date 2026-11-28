@@ -178,7 +178,11 @@ def test_employee_cannot_open_employee_directory():
     assert client.get("/employees").status_code == 403
 
 
-def test_manager_employee_scope_is_department_limited():
+def test_manager_employee_scope_is_branch_limited():
+    with app.app_context():
+        emp2 = get_user("other@test.local")
+        emp2.branch = "Bangalore (Whitefield)"
+        db.session.commit()
     client = app.test_client()
     login(client, "manager@test.local")
     response = client.get("/employees")
@@ -275,7 +279,7 @@ def test_csv_report_contains_headers_and_attendance():
     response = client.get(f"/reports.csv?start={now_ist().date().isoformat()}&end={now_ist().date().isoformat()}")
     assert response.status_code == 200
     assert response.headers["Content-Type"].startswith("text/csv")
-    assert b"Date,Employee Name,Department,Role,Login Status,Login Time,Logout Time,Logout Status" in response.data
+    assert b"Date,Employee Name,Branch,Department,Role,Login Status,Login Time,Logout Time,Logout Status" in response.data
     assert b"Employee One" in response.data
     assert b"10:00 AM" in response.data
     assert b"Normal" in response.data
@@ -545,7 +549,7 @@ def test_daily_owner_report_shows_login_logout_and_absence_statuses():
     csv_response = client.get(f"/reports/daily.csv?date={report_day.isoformat()}")
     assert csv_response.status_code == 200
     assert csv_response.headers["Content-Type"].startswith("text/csv")
-    assert b"Employee Name,Login Status,Logout Status" in csv_response.data
+    assert b"Employee Name,Branch,Login Status,Logout Status" in csv_response.data
     assert b"Employee Two" in csv_response.data
     assert b"Absent" in csv_response.data
     assert b"Login Time" not in csv_response.data
@@ -1252,11 +1256,14 @@ def test_logout_invalidates_session_and_clears_cookies():
     assert "/login" in dash_after.location
 
 
-def test_logout_supports_get_and_clears_session():
+def test_logout_requires_post_and_clears_session():
     client = app.test_client()
     login(client, "Employee One")
-    # Logout via GET
-    logout_resp = client.get("/logout", follow_redirects=False)
+    # GET /logout is rejected (POST-only for CSRF safety)
+    get_resp = client.get("/logout", follow_redirects=False)
+    assert get_resp.status_code == 405
+
+    logout_resp = client.post("/logout", follow_redirects=False)
     assert logout_resp.status_code == 302
     assert "/login" in logout_resp.location
 
@@ -1288,23 +1295,24 @@ def test_sequential_employee_logins_are_strictly_isolated():
 
 
 def test_manager_department_isolation_on_attendance_modifications():
-    """Verify managers cannot mark attendance, grant exceptions, or checkout employees from other departments."""
+    """Verify managers cannot mark attendance, grant exceptions, or checkout employees from other branches."""
     today = now_ist().date()
     manager_client = app.test_client()
-    login(manager_client, "manager@test.local")  # Operations department
+    login(manager_client, "manager@test.local")  # Tumkur (Satyamangala) branch
 
     with app.app_context():
-        emp2 = User.query.filter_by(email="other@test.local").first()  # Fleet department
-        assert emp2.department == "Fleet"
+        emp2 = User.query.filter_by(email="other@test.local").first()
+        emp2.branch = "Bangalore (Whitefield)"
         emp2_id = emp2.id
 
-        # Create an attendance record for Employee Two
+        # Create an attendance record for Employee Two in Whitefield
         rec = Attendance(
             user_id=emp2_id,
             attendance_date=today,
             checkin_at=datetime.combine(today, time(10, 30)),
             checkin_latitude=12.9700,
             checkin_longitude=77.5900,
+            branch="Bangalore (Whitefield)",
         )
         db.session.add(rec)
         db.session.commit()
@@ -1361,6 +1369,237 @@ def test_manager_can_modify_own_department_attendance():
         assert rec is not None
         assert rec.marked_by_admin is True
         assert "Approved by Operations Manager" in rec.admin_note
+
+
+def test_manager_sees_all_departments_within_own_branch():
+    """Verify a branch-scoped manager sees employees from other departments in the same branch."""
+    with app.app_context():
+        emp2 = get_user("other@test.local")  # Fleet department, Tumkur (Satyamangala) branch
+        assert emp2.department == "Fleet"
+        assert emp2.branch == "Tumkur (Satyamangala)"
+    client = app.test_client()
+    login(client, "manager@test.local")
+    response = client.get("/employees")
+    assert b"Employee One" in response.data
+    assert b"Employee Two" in response.data
+
+
+def test_admin_sqlite_backup_download_and_rbac():
+    """Verify only admins can download a valid SQLite backup snapshot."""
+    admin_client = app.test_client()
+    login(admin_client, "admin@test.local")
+    resp = admin_client.get("/admin/backup.sqlite3")
+    assert resp.status_code == 200
+    assert resp.data.startswith(b"SQLite format 3\x00")
+    assert "balaji-workforce-backup-" in resp.headers.get("Content-Disposition", "")
+
+    manager_client = app.test_client()
+    login(manager_client, "manager@test.local")
+    assert manager_client.get("/admin/backup.sqlite3").status_code == 403
+
+    emp_client = app.test_client()
+    login(emp_client, "Employee One")
+    assert emp_client.get("/admin/backup.sqlite3").status_code == 403
+
+
+def test_records_and_reports_branch_filtering():
+    """Verify admins can filter /records and /reports by branch."""
+    today = now_ist().date()
+    with app.app_context():
+        emp1 = get_user("employee@test.local")
+        emp2 = get_user("other@test.local")
+        emp2.branch = "Bangalore (Whitefield)"
+        db.session.add_all([
+            Attendance(user_id=emp1.id, attendance_date=today, checkin_at=datetime.combine(today, time(10, 0)),
+                       checkin_latitude=12.97, checkin_longitude=77.59, branch="Tumkur (Satyamangala)"),
+            Attendance(user_id=emp2.id, attendance_date=today, checkin_at=datetime.combine(today, time(10, 0)),
+                       checkin_latitude=12.97, checkin_longitude=77.59, branch="Bangalore (Whitefield)"),
+        ])
+        db.session.commit()
+
+    admin_client = app.test_client()
+    login(admin_client, "admin@test.local")
+
+    rec_wf = admin_client.get("/records?branch=Bangalore+(Whitefield)")
+    assert rec_wf.status_code == 200
+    rec_tbody = rec_wf.data.split(b"<tbody>")[1].split(b"</tbody>")[0]
+    assert b"Employee Two" in rec_tbody
+    assert b"Employee One" not in rec_tbody
+
+    rep_wf = admin_client.get(f"/reports?start={today.isoformat()}&end={today.isoformat()}&branch=Bangalore+(Whitefield)")
+    assert rep_wf.status_code == 200
+    rep_tbody = rep_wf.data.split(b"<tbody>")[1].split(b"</tbody>")[0]
+    assert b"Employee Two" in rep_tbody
+    assert b"Employee One" not in rep_tbody
+
+
+def test_whitefield_branch_geofence_isolation():
+    """Verify Whitefield staff fail closed without Whitefield coords and validate against Whitefield once set."""
+    with app.app_context():
+        emp2 = get_user("other@test.local")
+        emp2.branch = "Bangalore (Whitefield)"
+        db.session.commit()
+
+    wf_client = app.test_client()
+    login(wf_client, "other@test.local")
+
+    # 1. Whitefield coords blank -> 503 even though Tumkur coords are configured
+    unconfigured = wf_client.post("/api/attendance/check-in", json={"latitude": 12.9700, "longitude": 77.5900})
+    assert unconfigured.status_code == 503
+    assert b"bangalore (whitefield)" in unconfigured.data.lower()
+
+    # 2. Configure Whitefield coords -> Tumkur coords rejected (403), Whitefield coords accepted (201)
+    app.config.update(
+        WHITEFIELD_GEOFENCE_LATITUDE="12.9698",
+        WHITEFIELD_GEOFENCE_LONGITUDE="77.7499",
+        WHITEFIELD_GEOFENCE_RADIUS_METERS="200",
+    )
+    try:
+        wrong_branch = wf_client.post("/api/attendance/check-in", json={"latitude": 13.3698889, "longitude": 77.1190278})
+        assert wrong_branch.status_code == 403
+        assert b"bangalore (whitefield)" in wrong_branch.data.lower()
+
+        ok_checkin = wf_client.post("/api/attendance/check-in", json={"latitude": 12.9698, "longitude": 77.7499})
+        assert ok_checkin.status_code == 201
+        assert ok_checkin.get_json()["branch"] == "Bangalore (Whitefield)"
+    finally:
+        app.config.pop("WHITEFIELD_GEOFENCE_LATITUDE", None)
+        app.config.pop("WHITEFIELD_GEOFENCE_LONGITUDE", None)
+        app.config.pop("WHITEFIELD_GEOFENCE_RADIUS_METERS", None)
+
+
+def test_pwa_manifest_service_worker_and_install_prompt():
+    """Verify PWA manifest, service worker, icons, and install banner markup."""
+    client = app.test_client()
+
+    manifest = client.get("/manifest.json")
+    assert manifest.status_code == 200
+    assert manifest.mimetype == "application/manifest+json"
+    m_json = manifest.get_json()
+    assert m_json["display"] == "standalone"
+    assert len(m_json["icons"]) >= 2
+
+    sw = client.get("/sw.js")
+    assert sw.status_code == 200
+    assert sw.headers.get("Service-Worker-Allowed") == "/"
+    assert "no-cache" in sw.headers.get("Cache-Control", "")
+
+    icon192 = client.get("/static/icons/icon-192.png")
+    icon512 = client.get("/static/icons/icon-512.png")
+    assert icon192.status_code == 200 and icon192.data.startswith(b"\x89PNG")
+    assert icon512.status_code == 200 and icon512.data.startswith(b"\x89PNG")
+
+    login_page = client.get("/login")
+    assert login_page.status_code == 200
+    assert b"manifest.json" in login_page.data
+    assert b"serviceWorker" in login_page.data
+    assert b"pwaInstallBanner" in login_page.data
+
+
+def test_download_apk_requires_authentication():
+    """Verify /download-apk and /apk require a logged-in user."""
+    client = app.test_client()
+    for path in ("/download-apk", "/apk"):
+        resp = client.get(path, follow_redirects=False)
+        assert resp.status_code == 302
+        assert "/login" in resp.location
+
+
+def test_seed_initial_accounts_respects_env_vars_in_production(monkeypatch):
+    """Verify seed_initial_accounts never seeds a hardcoded weak password when env var is missing."""
+    from app import seed_initial_accounts
+
+    with app.app_context():
+        # Clear existing admin accounts to test fresh seeding behavior
+        User.query.filter_by(role="admin").delete()
+        db.session.commit()
+
+        monkeypatch.setenv("FLASK_ENV", "production")
+        monkeypatch.delenv("INITIAL_ADMIN_PASSWORD", raising=False)
+        seed_initial_accounts()
+        assert User.query.filter_by(role="admin").first() is None
+
+        monkeypatch.setenv("INITIAL_ADMIN_EMAIL", "owner@balaji.test")
+        monkeypatch.setenv("INITIAL_ADMIN_PASSWORD", "Str0ngEnvPass!99")
+        seed_initial_accounts()
+        seeded = User.query.filter_by(email="owner@balaji.test").first()
+        assert seeded is not None
+        assert seeded.role == "admin"
+        assert seeded.check_password("Str0ngEnvPass!99")
+
+
+def test_quick_checkout_closes_active_break_and_accumulates_seconds():
+    """Verify admin quick_checkout closes an in-progress break before setting checkout_at."""
+    from datetime import timedelta
+    today = now_ist().date()
+    with app.app_context():
+        emp = get_user("employee@test.local")
+        rec = Attendance(
+            user_id=emp.id,
+            attendance_date=today,
+            checkin_at=datetime.combine(today, time(10, 0)),
+            checkin_latitude=12.97,
+            checkin_longitude=77.59,
+            break_start_at=now_ist() - timedelta(minutes=12),
+            break_end_at=None,
+            total_break_seconds=180,
+            branch=emp.branch,
+        )
+        db.session.add(rec)
+        db.session.commit()
+        rec_id = rec.id
+
+    admin_client = app.test_client()
+    login(admin_client, "admin@test.local")
+    resp = admin_client.post(f"/attendance/{rec_id}/quick-checkout", follow_redirects=False)
+    assert resp.status_code == 302
+
+    with app.app_context():
+        updated = db.session.get(Attendance, rec_id)
+        assert updated.checkout_at is not None
+        assert updated.break_end_at is not None
+        assert not updated.break_in_progress
+        assert updated.total_break_seconds >= 180 + 11 * 60
+
+
+def test_admin_attendance_rejects_invalid_checkout_and_break_order():
+    """Verify manual_mark_attendance validates checkout > checkin and break_end > break_start."""
+    today = now_ist().date()
+    with app.app_context():
+        emp = get_user("employee@test.local")
+        emp_id = emp.id
+
+    admin_client = app.test_client()
+    login(admin_client, "admin@test.local")
+
+    bad_checkout = admin_client.post(
+        "/attendance/manual-mark",
+        data={
+            "user_id": str(emp_id),
+            "attendance_date": today.isoformat(),
+            "checkin_time": "10:00",
+            "checkout_time": "09:30",
+        },
+        follow_redirects=True,
+    )
+    assert bad_checkout.status_code == 200
+    assert b"check-out time must be after check-in time" in bad_checkout.data.lower()
+
+    bad_break = admin_client.post(
+        "/attendance/manual-mark",
+        data={
+            "user_id": str(emp_id),
+            "attendance_date": today.isoformat(),
+            "checkin_time": "10:00",
+            "checkout_time": "19:00",
+            "include_break": "on",
+            "break_start_time": "14:00",
+            "break_end_time": "13:00",
+        },
+        follow_redirects=True,
+    )
+    assert bad_break.status_code == 200
+    assert b"break end time must be after break start time" in bad_break.data.lower()
 
 
 def test_employee_cannot_access_administrative_endpoints():

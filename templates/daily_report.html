@@ -9,12 +9,18 @@
     <p>A simple end-of-day summary showing each employee’s login and logout status only. No attendance times are displayed.</p>
   </div>
   <div style="display:flex;gap:8px;flex-wrap:wrap">
-    <a class="btn btn-primary" href="{{ url_for('daily_owner_report_csv', date=report_day.isoformat()) }}"><i class="bi bi-filetype-csv"></i> Download daily CSV</a>
-    <a class="btn btn-outline" href="{{ url_for('reports') }}"><i class="bi bi-arrow-left"></i> All reports</a>
+    <a class="btn btn-primary" href="{{ url_for('daily_owner_report_csv', date=report_day.isoformat(), branch=selected_branch) }}"><i class="bi bi-filetype-csv"></i> Download daily CSV</a>
+    <a class="btn btn-outline" href="{{ url_for('reports', branch=selected_branch) }}"><i class="bi bi-arrow-left"></i> All reports</a>
   </div>
 </div>
 <section class="panel report-filter-panel">
   <form class="filter-bar" method="get">
+    <select name="branch" aria-label="Filter by branch">
+      <option value="">All branches</option>
+      {% for b in branches %}
+      <option value="{{ b }}" {% if selected_branch == b %}selected{% endif %}>{{ b }}</option>
+      {% endfor %}
+    </select>
     <div class="date-filter"><label for="date">Report date</label><input id="date" name="date" type="date" value="{{ report_day.isoformat() }}" required></div>
     <button class="btn btn-outline" type="submit"><i class="bi bi-calendar-check"></i> Generate report</button>
     <span class="report-period">{{ report_day.strftime('%A, %d %B %Y') }}</span>
@@ -29,10 +35,11 @@
 <section class="panel list-panel">
   <div class="panel-header inside-panel-header"><div><h2>Employee attendance</h2><p>{{ rows|length }} active workforce account(s) for the selected date.</p></div></div>
   {% if rows %}
-  <div class="table-scroll"><table class="data-table"><thead><tr><th>Employee name</th><th>Login status</th><th>Logout status</th></tr></thead><tbody>
+  <div class="table-scroll"><table class="data-table"><thead><tr><th>Employee name</th><th>Branch</th><th>Login status</th><th>Logout status</th></tr></thead><tbody>
     {% for row in rows %}
     <tr>
       <td><strong>{{ row.employee_name }}</strong></td>
+      <td><span class="badge" style="background:#f0f4ff;color:#3b5bdb;border:1px solid #dbe4ff;font-size:10px;font-weight:600">{{ row.branch }}</span></td>
       <td>{% if row.login_status in ['Normal'] %}<span class="badge badge-present"><span></span>{{ row.login_status }}</span>{% elif row.login_status == 'Late' %}<span class="badge badge-late"><span></span>Late</span>{% elif row.login_status == 'Absent' %}<span class="badge badge-late"><span></span>Absent</span>{% else %}<span class="badge badge-absent"><span></span>{{ row.login_status }}</span>{% endif %}</td>
       <td>{% if row.logout_status == 'On Time' %}<span class="badge badge-present"><span></span>On Time</span>{% elif row.logout_status == 'Early' %}<span class="badge badge-late"><span></span>Early</span>{% elif row.logout_status == 'Pending' %}<span class="badge badge-absent"><span></span>Pending</span>{% else %}{{ row.logout_status }}{% endif %}</td>
     </tr>
